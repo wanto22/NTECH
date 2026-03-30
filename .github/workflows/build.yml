@@ -1,0 +1,50 @@
+name: Build NTECH CDI Tuner APK
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate project files
+        run: |
+          python3 << 'PYEOF'
+          # copy seluruh kode Python generator di sini
+          PYEOF
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: Generate Gradle Wrapper
+        run: cd NtechCDI && gradle wrapper --gradle-version 8.2
+
+      - name: Clean project
+        run: cd NtechCDI && chmod +x gradlew && ./gradlew clean
+
+      - name: Build APK
+        run: cd NtechCDI && ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NTECH-CDI-Tuner-APK
+          path: NtechCDI/app/build/outputs/apk/debug/app-debug.apk
