@@ -1,4 +1,4 @@
-name: Build NTECH CDI Final Clean
+name: Build NTECH CDI Super Stable
 
 on:
   push:
@@ -9,41 +9,69 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Create NTECH Project Files
+      - name: Create NTECH Project (Modern Structure)
         run: |
-          python3 << 'PYEOF'
+          cat << 'PYEOF' > create_project.py
           import os
+
           def w(p, c):
-              folder = os.path.dirname(p)
-              if folder and not os.path.exists(folder):
-                  os.makedirs(folder, exist_ok=True)
+              os.makedirs(os.path.dirname(p) or '.', exist_ok=True)
               with open(p, 'w', encoding='utf-8') as f:
-                  f.write(c)
+                  f.write(c.strip())
 
+          # 1. KONFIGURASI GRADLE MODERN (Bebas Error DependencyHandler)
+          w("settings.gradle", """
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }
+          }
+          rootProject.name = 'NtechCDI'
+          include ':app'
+          """)
+
+          w("build.gradle", """
+          plugins {
+              id 'com.android.application' version '8.1.1' apply false
+              id 'org.jetbrains.kotlin.android' version '1.8.20' apply false
+          }
+          """)
+
+          w("app/build.gradle", """
+          plugins { id 'com.android.application'; id 'org.jetbrains.kotlin.android' }
+          android {
+              namespace 'com.ntech.cdi'
+              compileSdk 34
+              defaultConfig { applicationId 'com.ntech.cdi'; minSdk 24; targetSdk 34; versionCode 1; versionName '1.0' }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = '17' }
+          }
+          dependencies {
+              implementation 'androidx.core:core-ktx:1.10.1'
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.10.0'
+              implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
+          }
+          """)
+
+          w("gradle.properties", "android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m")
+
+          # 2. FILE KOTLIN
           pkg = "app/src/main/java/com/ntech/cdi"
-          res = "app/src/main/res"
-
-          # 1. LOGIKA DASAR
           w(f"{pkg}/CdiConfig.kt", "package com.ntech.cdi\nclass CdiConfig { var map1 = IntArray(32) { 15 } }")
           w(f"{pkg}/MainActivity.kt", "package com.ntech.cdi\nimport android.os.*\nimport androidx.appcompat.app.AppCompatActivity\nimport com.ntech.cdi.ui.MapFragment\nclass MainActivity : AppCompatActivity() {\n    override fun onCreate(s: Bundle?) {\n        super.onCreate(s); setContentView(R.layout.act_main)\n        supportFragmentManager.beginTransaction().replace(R.id.frag, MapFragment()).commit()\n    }\n}")
+          w(f"{pkg}/ui/MapFragment.kt", "package com.ntech.cdi.ui\nimport android.graphics.Color\nimport android.os.Bundle\nimport android.view.*\nimport androidx.fragment.app.Fragment\nimport com.github.mikephil.charting.charts.LineChart\nimport com.github.mikephil.charting.data.*\nimport com.ntech.cdi.*\nclass MapFragment : Fragment() {\n    override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.frag_map, c, false)\n    override fun onViewCreated(v: View, s: Bundle?) {\n        val chart = v.findViewById<LineChart>(R.id.chart)\n        val entries = (0..31).map { Entry(it.toFloat(), 15f) }\n        val set = LineDataSet(entries, \"Kurva CDI\").apply { color = Color.RED; setCircleColor(Color.WHITE) }\n        chart.data = LineData(set)\n        chart.setBackgroundColor(Color.BLACK)\n        chart.invalidate()\n    }\n}")
 
-          # 2. FRAGMENT GRAFIK
-          w(f"{pkg}/ui/MapFragment.kt", "package com.ntech.cdi.ui\nimport android.graphics.Color\nimport android.os.Bundle\nimport android.view.*\nimport androidx.fragment.app.Fragment\nimport com.github.mikephil.charting.charts.LineChart\nimport com.github.mikephil.charting.data.*\nimport com.ntech.cdi.*\nclass MapFragment : Fragment() {\n    override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.frag_map, c, false)\n    override fun onViewCreated(v: View, s: Bundle?) {\n        val chart = v.findViewById<LineChart>(R.id.chart)\n        val entries = (0..31).map { Entry(it.toFloat(), 15f) }\n        chart.data = LineData(LineDataSet(entries, \"NTECH Curve\").apply { color = Color.RED })\n        chart.invalidate()\n    }\n}")
-
-          # 3. KONFIGURASI GRADLE ANTI-ERROR (Versi Super Stabil)
-          w("settings.gradle", "rootProject.name='NtechCDI'\ninclude ':app'")
-          w("gradle.properties", "android.useAndroidX=true\nandroid.enableJetifier=true")
-          w("build.gradle", "buildscript { repositories { google(); mavenCentral() }\n    dependencies { classpath 'com.android.tools.build:gradle:7.4.2'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0' } }\nallprojects { repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } } }")
-          w("app/build.gradle", "plugins { id 'com.android.application'; id 'kotlin-android' }\nandroid { compileSdk 33\n    namespace 'com.ntech.cdi'\n    defaultConfig { applicationId 'com.ntech.cdi'; minSdk 24; targetSdk 33; versionCode 1; versionName '1.0' } }\ndependencies { implementation 'androidx.appcompat:appcompat:1.6.1'; implementation 'com.google.android.material:material:1.8.0'; implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0' }")
-
-          # 4. LAYOUT & MANIFEST
-          w("app/src/main/AndroidManifest.xml", "<?xml version='1.0' encoding='utf-8'?>\n<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.ntech.cdi'>\n    <application android:label='NTECH' android:theme='@style/Theme.AppCompat.Light.NoActionBar'>\n        <activity android:name='.MainActivity' android:exported='true'>\n            <intent-filter><action android:name='android.intent.action.MAIN'/><category android:name='android.intent.category.LAUNCHER'/></intent-filter>\n        </activity>\n    </application>\n</manifest>")
+          # 3. MANIFEST & LAYOUT
+          res = "app/src/main/res"
+          w("app/src/main/AndroidManifest.xml", "<?xml version='1.0' encoding='utf-8'?><manifest xmlns:android='http://schemas.android.com/apk/res/android'><application android:label='NTECH' android:theme='@style/Theme.AppCompat.Light.NoActionBar'><activity android:name='.MainActivity' android:exported='true'><intent-filter><action android:name='android.intent.action.MAIN'/><category android:name='android.intent.category.LAUNCHER'/></intent-filter></activity></application></manifest>")
           w(f"{res}/layout/act_main.xml", "<FrameLayout xmlns:android='http://schemas.android.com/apk/res/android' android:id='@+id/frag' android:layout_width='match_parent' android:layout_height='match_parent' android:background='#000'/>")
-          w(f"{res}/layout/frag_map.xml", "<LinearLayout xmlns:android='http://schemas.android.com/apk/res/android' android:layout_width='match_parent' android:layout_height='match_parent' android:orientation='vertical'>\n    <com.github.mikephil.charting.charts.LineChart android:id='@+id/chart' android:layout_width='match_parent' android:layout_height='300dp'/>\n</LinearLayout>")
+          w(f"{res}/layout/frag_map.xml", "<LinearLayout xmlns:android='http://schemas.android.com/apk/res/android' android:layout_width='match_parent' android:layout_height='match_parent' android:orientation='vertical'><com.github.mikephil.charting.charts.LineChart android:id='@+id/chart' android:layout_width='match_parent' android:layout_height='300dp'/></LinearLayout>")
           PYEOF
+          python3 create_project.py
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -53,12 +81,12 @@ jobs:
 
       - name: Build APK (Clean & Build)
         run: |
-          gradle wrapper --gradle-version 7.5
+          gradle wrapper --gradle-version 8.1.1
           chmod +x gradlew
           ./gradlew clean assembleDebug --no-daemon
 
       - name: Upload NTECH APK
         uses: actions/upload-artifact@v4
         with:
-          name: NTECH-CDI-Final-Stable
+          name: NTECH-CDI-Stable
           path: app/build/outputs/apk/debug/app-debug.apk
