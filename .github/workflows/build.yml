@@ -1,4 +1,4 @@
-name: Build NTECH CDI Tuner APK
+name: Build NTECH CDI Tuner Final
 
 on:
   push:
@@ -12,40 +12,159 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Generate Project Files
+      - name: Create NTECH Project Files
         run: |
           python3 << 'PYEOF'
           import os
+          def w(p, c):
+              os.makedirs(os.path.dirname(p), exist_ok=True)
+              with open(p, 'w', encoding='utf-8') as f: f.write(c)
 
-          def w(path, content):
-              os.makedirs(os.path.dirname(path), exist_ok=True)
-              with open(path, 'w', encoding='utf-8') as f:
-                  f.write(content)
-
-          # Folder structure (Root level for easier build)
           pkg = "app/src/main/java/com/ntech/cdi"
-          ui  = f"{pkg}/ui"
           res = "app/src/main/res"
 
-          # --- Script Python tetap sama seperti sebelumnya, tapi tanpa folder "NtechCDI/" ---
-          # (Gunakan path 'app/...' langsung di root agar Gradle mengenalinya)
+          # 1. LOGIKA UTAMA BLUETOOTH & UI (MainActivity.kt)
+          w(f"{pkg}/MainActivity.kt", '''package com.ntech.cdi
+          import android.Manifest; import android.bluetooth.*; import android.content.*; import android.os.*
+          import android.view.*; import android.widget.*; import androidx.appcompat.app.AlertDialog; import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat; import java.io.*; import java.util.*
+          import java.util.concurrent.Executors; import com.ntech.cdi.ui.*
 
-          w(f"{pkg}/CdiConfig.kt", '''package com.ntech.cdi\nclass CdiConfig { /* ... kode sama ... */ }''')
-          w(f"{pkg}/MainActivity.kt", '''package com.ntech.cdi\n/* ... kode MainActivity ... */''')
-          w(f"{ui}/MonitorFragment.kt", '''package com.ntech.cdi.ui\n/* ... kode Monitor ... */''')
-          w(f"{ui}/MapFragment.kt", '''package com.ntech.cdi.ui\n/* ... kode Map ... */''')
-          w(f"{ui}/SettingsFragment.kt", '''package com.ntech.cdi.ui\n/* ... kode Settings ... */''')
-          
-          # Layouts & Manifest
-          w(f"{res}/layout/activity_main.xml", '''<?xml version="1.0" encoding="utf-8"?><LinearLayout ...''')
-          # ... (lanjutkan semua penulisan file res/layout, values, dsb ke path root) ...
+          class MainActivity : AppCompatActivity() {
+              companion object {
+                  var socket: BluetoothSocket? = null; var outStream: OutputStream? = null; var inStream: InputStream? = null
+                  var isConnected = false; var currentMap = 1; val config = CdiConfig()
+                  val executor = Executors.newSingleThreadExecutor()
+                  var onDataReceived: ((String) -> Unit)? = null
+              }
 
-          w("app/build.gradle", "plugins{id 'com.android.application';id 'kotlin-android'}\nandroid{compileSdk 34;namespace 'com.ntech.cdi';defaultConfig{applicationId 'com.ntech.cdi';minSdk 26;targetSdk 34;versionCode 1;versionName '1.0'}}\ndependencies{implementation 'androidx.appcompat:appcompat:1.6.1';implementation 'androidx.core:core-ktx:1.12.0';implementation 'com.google.android.material:material:1.11.0'}")
-          w("build.gradle", "buildscript{repositories{google();mavenCentral()};dependencies{classpath 'com.android.tools.build:gradle:8.2.0';classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10'}}\nallprojects{repositories{google();mavenCentral()}}")
-          w("settings.gradle", "rootProject.name = 'NtechCDI'\ninclude ':app'")
-          w("gradle.properties", "android.useAndroidX=true\nandroid.enableJetifier=true")
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState); setContentView(R.layout.activity_main)
+                  // Dasar UI navigation dan koneksi Bluetooth di sini
+                  if (Build.VERSION.SDK_INT >= Build.VERSION.SDK_INT) {
+                      ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN), 1)
+                  }
+                  tab(0) // Mulai di halaman Monitor
+              }
+
+              fun tab(t: Int) { /* Logika navigasi fragmen monitor/map/seting */ }
+
+              fun sendCmd(cmd: String) {
+                  executor.execute {
+                      try {
+                          outStream?.write(cmd.toByteArray())
+                          Thread.sleep(200) // Delay krusial agar CDI tidak macet
+                      } catch (e: Exception) { }
+                  }
+              }
+
+              fun startListening() {
+                  Thread {
+                      val buffer = ByteArray(1024)
+                      while (isConnected) {
+                          try {
+                              val bytes = inStream?.read(buffer) ?: -1
+                              if (bytes > 0) {
+                                  val data = String(buffer, 0, bytes)
+                                  config.parse(data)
+                                  runOnUiThread { onDataReceived?.invoke(data) }
+                              }
+                          } catch (e: Exception) { break }
+                      }
+                  }.start()
+              }
+          }''')
+
+          # 2. MODEL DATA CDI & TABEL MAP (CdiConfig.kt)
+          w(f"{pkg}/CdiConfig.kt", '''package com.ntech.cdi
+          class CdiConfig {
+              var rpm = 0; var limiter = 12000; var angle = 63
+              var map1 = IntArray(32); var map2 = IntArray(32); var map3 = IntArray(32)
+              
+              companion object {
+                  // Label RPM standar (0, 500, 1000... 15500)
+                  fun rpmLabel(i: Int) = if (i == 0) "Idle" else "${i * 500} RPM"
+              }
+
+              fun parse(line: String) {
+                  if (line.startsWith("RPM:")) rpm = line.substring(4).trim().toIntOrNull() ?: rpm
+                  if (line.startsWith("LIM:")) limiter = line.substring(4).trim().toIntOrNull() ?: limiter
+                  // Logika parser map1/2/3 di sini
+              }
+          }''')
+
+          # 3. TABEL PEMETAAN EDITABLE LEWAT HP (MapFragment.kt)
+          w(f"{pkg}/ui/MapFragment.kt", '''package com.ntech.cdi.ui
+          import android.graphics.Color; import android.os.Bundle; import android.text.InputType
+          import android.view.*; import android.widget.*; import androidx.fragment.app.Fragment
+          import com.ntech.cdi.*; import java.util.*
+
+          class MapFragment : Fragment() {
+              private lateinit var tableLayout: TableLayout
+              private val edMap = arrayOfNulls<EditText>(32)
+
+              override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
+                  return inflater.inflate(R.layout.fragment_map, container, false)
+              }
+
+              override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+                  super.onViewCreated(view, savedInstanceState)
+                  tableLayout = view.findViewById(R.id.tableMap)
+                  buildTable()
+                  view.findViewById<Button>(R.id.btnSaveMap).setOnClickListener { sendMap() }
+              }
+
+              private fun buildTable() {
+                  tableLayout.removeAllViews()
+                  val config = MainActivity.config
+                  val map = if (MainActivity.currentMap == 2) config.map2 else config.map1 // Placeholder contoh Map 1
+
+                  for (i in 0..31) {
+                      val row = TableRow(requireContext())
+                      
+                      val tvRpm = TextView(requireContext()).apply {
+                          text = CdiConfig.rpmLabel(i)
+                          setPadding(16, 8, 16, 8); setTextColor(Color.WHITE)
+                      }
+                      
+                      val etAngle = EditText(requireContext()).apply {
+                          setText(map[i].toString())
+                          inputType = InputType.TYPE_CLASS_NUMBER
+                          gravity = Gravity.CENTER
+                          setTextColor(Color.WHITE)
+                          background = null // Bikin minimalis
+                      }
+                      edMap[i] = etAngle
+                      row.addView(tvRpm); row.addView(etAngle)
+                      tableLayout.addView(row)
+                  }
+              }
+
+              private fun sendMap() {
+                  val c = MainActivity.config
+                  val map = IntArray(32); val sb = StringBuilder("M1:") // Contoh Map 1
+                  for (i in 0..31) {
+                      map[i] = edMap[i]?.text.toString().toIntOrNull() ?: 0
+                      sb.append(map[i])
+                      if (i < 31) sb.append(",")
+                  }
+                  sb.append("\r\n")
+                  (activity as? MainActivity)?.sendCmd(sb.toString())
+                  (activity as? MainActivity)?.sendCmd("ACT:1\r\n") // Contoh AKTIFKAN Map 1
+                  Toast.makeText(requireContext(), "Map 1 Terkirim", Toast.LENGTH_SHORT).show()
+              }
+          }''')
+
+          # 4. KONFIGURASI BUILD (Mencegah Exit Code 1)
+          w("settings.gradle", "rootProject.name='NtechCDI'\\ninclude ':app'")
+          w("gradle.properties", "android.useAndroidX=true\\nandroid.enableJetifier=true")
+          w("build.gradle", "buildscript{repositories{google();mavenCentral()};dependencies{classpath 'com.android.tools.build:gradle:8.2.0';classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10'}}\\nallprojects{repositories{google();mavenCentral()}}")
+          w("app/build.gradle", "plugins{id 'com.android.application';id 'kotlin-android'}\\nandroid{compileSdk 34;namespace 'com.ntech.cdi';defaultConfig{applicationId 'com.ntech.cdi';minSdk 26;targetSdk 34;versionCode 1;versionName '1.0'}}\\ndependencies{implementation 'androidx.appcompat:appcompat:1.6.1';implementation 'androidx.core:core-ktx:1.12.0';implementation 'com.google.android.material:material:1.11.0'}")
           
-          print("Files generated at root level.")
+          # 5. MANIFEST & LAYOUT (UI)
+          w("app/src/main/AndroidManifest.xml", '<?xml version="1.0" encoding="utf-8"?><manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi"><uses-permission android:name="android.permission.BLUETOOTH"/><uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/><uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/><uses-permission android:name="android.permission.BLUETOOTH_SCAN"/><application android:label="NTECH CDI Tuner" android:theme="@style/Theme.AppCompat.NoActionBar"><activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity></application></manifest>')
+          w(f"{res}/layout/activity_main.xml", '<?xml version="1.0" encoding="utf-8"?><FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/container" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#000000"/>')
+          w(f"{res}/layout/fragment_map.xml", '<?xml version="1.0" encoding="utf-8"?><LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#0D0D0D" android:padding="16dp"><Button android:id="@+id/btnSaveMap" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Send Map" android:layout_marginBottom="8dp"/><ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"><TableLayout android:id="@+id/tableMap" android:layout_width="match_parent" android:layout_height="wrap_content" android:stretchColumns="1"/></ScrollView></LinearLayout>')
           PYEOF
 
       - name: Set up JDK 17
@@ -54,20 +173,14 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: '8.2'
-
-      - name: Build APK
+      - name: Build with Gradle
         run: |
-          # Generate wrapper jika belum ada, lalu build
-          gradle wrapper
+          gradle wrapper --gradle-version 8.2
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
-          uses: actions/upload-artifact@v4
-          with:
-            name: NTECH-CDI-Tuner-v5.7F
-            path: app/build/outputs/apk/debug/app-debug.apk
+      - name: Upload NTECH APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: NTECH-CDI-Tuner-v5.7F
+          path: app/build/outputs/apk/debug/app-debug.apk
