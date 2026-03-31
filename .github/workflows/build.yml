@@ -1,4 +1,4 @@
-name: Build NTECH CDI Tuner Final
+name: Build NTECH CDI Final Clean
 
 on:
   push:
@@ -26,18 +26,18 @@ jobs:
           pkg = "app/src/main/java/com/ntech/cdi"
           res = "app/src/main/res"
 
-          # 1. MODEL & MAIN ACTIVITY
+          # 1. LOGIKA DASAR
           w(f"{pkg}/CdiConfig.kt", "package com.ntech.cdi\nclass CdiConfig { var map1 = IntArray(32) { 15 } }")
           w(f"{pkg}/MainActivity.kt", "package com.ntech.cdi\nimport android.os.*\nimport androidx.appcompat.app.AppCompatActivity\nimport com.ntech.cdi.ui.MapFragment\nclass MainActivity : AppCompatActivity() {\n    override fun onCreate(s: Bundle?) {\n        super.onCreate(s); setContentView(R.layout.act_main)\n        supportFragmentManager.beginTransaction().replace(R.id.frag, MapFragment()).commit()\n    }\n}")
 
-          # 2. FRAGMENT DENGAN GRAFIK
-          w(f"{pkg}/ui/MapFragment.kt", "package com.ntech.cdi.ui\nimport android.graphics.Color\nimport android.os.Bundle\nimport android.view.*\nimport androidx.fragment.app.Fragment\nimport com.github.mikephil.charting.charts.LineChart\nimport com.github.mikephil.charting.data.*\nimport com.ntech.cdi.*\nclass MapFragment : Fragment() {\n    override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.frag_map, c, false)\n    override fun onViewCreated(v: View, s: Bundle?) {\n        val chart = v.findViewById<LineChart>(R.id.chart)\n        val entries = (0..31).map { Entry(it.toFloat(), 15f) }\n        chart.data = LineData(LineDataSet(entries, \"Kurva NTECH\").apply { color = Color.RED })\n        chart.invalidate()\n    }\n}")
+          # 2. FRAGMENT GRAFIK
+          w(f"{pkg}/ui/MapFragment.kt", "package com.ntech.cdi.ui\nimport android.graphics.Color\nimport android.os.Bundle\nimport android.view.*\nimport androidx.fragment.app.Fragment\nimport com.github.mikephil.charting.charts.LineChart\nimport com.github.mikephil.charting.data.*\nimport com.ntech.cdi.*\nclass MapFragment : Fragment() {\n    override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.frag_map, c, false)\n    override fun onViewCreated(v: View, s: Bundle?) {\n        val chart = v.findViewById<LineChart>(R.id.chart)\n        val entries = (0..31).map { Entry(it.toFloat(), 15f) }\n        chart.data = LineData(LineDataSet(entries, \"NTECH Curve\").apply { color = Color.RED })\n        chart.invalidate()\n    }\n}")
 
-          # 3. KONFIGURASI GRADLE STABIL (Fix Error Isolate Value)
+          # 3. KONFIGURASI GRADLE ANTI-ERROR (Versi Super Stabil)
           w("settings.gradle", "rootProject.name='NtechCDI'\ninclude ':app'")
-          w("gradle.properties", "android.useAndroidX=true\nandroid.enableJetifier=true\norg.gradle.jvmargs=-Xmx2048m")
-          w("build.gradle", "buildscript { repositories { google(); mavenCentral() }\n    dependencies { classpath 'com.android.tools.build:gradle:8.1.1'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.10' } }\nallprojects { repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } } }")
-          w("app/build.gradle", "plugins { id 'com.android.application'; id 'kotlin-android' }\nandroid { compileSdk 34\n    namespace 'com.ntech.cdi'\n    defaultConfig { applicationId 'com.ntech.cdi'; minSdk 26; targetSdk 34; versionCode 1; versionName '1.0' } }\ndependencies { implementation 'androidx.appcompat:appcompat:1.6.1'; implementation 'com.google.android.material:material:1.9.0'; implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0' }")
+          w("gradle.properties", "android.useAndroidX=true\nandroid.enableJetifier=true")
+          w("build.gradle", "buildscript { repositories { google(); mavenCentral() }\n    dependencies { classpath 'com.android.tools.build:gradle:7.4.2'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.0' } }\nallprojects { repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } } }")
+          w("app/build.gradle", "plugins { id 'com.android.application'; id 'kotlin-android' }\nandroid { compileSdk 33\n    namespace 'com.ntech.cdi'\n    defaultConfig { applicationId 'com.ntech.cdi'; minSdk 24; targetSdk 33; versionCode 1; versionName '1.0' } }\ndependencies { implementation 'androidx.appcompat:appcompat:1.6.1'; implementation 'com.google.android.material:material:1.8.0'; implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0' }")
 
           # 4. LAYOUT & MANIFEST
           w("app/src/main/AndroidManifest.xml", "<?xml version='1.0' encoding='utf-8'?>\n<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.ntech.cdi'>\n    <application android:label='NTECH' android:theme='@style/Theme.AppCompat.Light.NoActionBar'>\n        <activity android:name='.MainActivity' android:exported='true'>\n            <intent-filter><action android:name='android.intent.action.MAIN'/><category android:name='android.intent.category.LAUNCHER'/></intent-filter>\n        </activity>\n    </application>\n</manifest>")
@@ -51,14 +51,14 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build APK
+      - name: Build APK (Clean & Build)
         run: |
-          gradle wrapper --gradle-version 8.1.1
+          gradle wrapper --gradle-version 7.5
           chmod +x gradlew
-          ./gradlew assembleDebug --stacktrace --no-daemon
+          ./gradlew clean assembleDebug --no-daemon
 
       - name: Upload NTECH APK
         uses: actions/upload-artifact@v4
         with:
-          name: NTECH-CDI-Final
+          name: NTECH-CDI-Final-Stable
           path: app/build/outputs/apk/debug/app-debug.apk
