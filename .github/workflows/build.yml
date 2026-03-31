@@ -12,7 +12,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Create NTECH Project Files with Chart
+      - name: Create NTECH Project Files
         run: |
           python3 << 'PYEOF'
           import os
@@ -25,166 +25,25 @@ jobs:
           pkg = "app/src/main/java/com/ntech/cdi"
           res = "app/src/main/res"
 
-          # 1. MODEL DATA & TABEL 32-TITIK (CdiConfig.kt)
-          w(f"{pkg}/CdiConfig.kt", '''package com.ntech.cdi
-          class CdiConfig {
-              var rpm = 0; var limiter = 12000
-              // Default map 15 derajat untuk semua titik (0-15500 RPM)
-              var map1 = IntArray(32) { 15 } 
-              
-              fun parse(line: String) {
-                  if (line.startsWith("RPM:")) rpm = line.substring(4).trim().toIntOrNull() ?: rpm
-                  if (line.startsWith("LIM:")) limiter = line.substring(4).trim().toIntOrNull() ?: limiter
-              }
-          }''')
+          # 1. MODEL DATA (CdiConfig.kt)
+          w(f"{pkg}/CdiConfig.kt", "package com.ntech.cdi\nclass CdiConfig {\n    var rpm = 0; var limiter = 12000\n    var map1 = IntArray(32) { 15 }\n    fun parse(line: String) {\n        if (line.startsWith(\"RPM:\")) rpm = line.substring(4).trim().toIntOrNull() ?: rpm\n    }\n}")
 
-          # 2. LOGIKA UTAMA BLUETOOTH (MainActivity.kt)
-          w(f"{pkg}/MainActivity.kt", '''package com.ntech.cdi
-          import android.os.*; import androidx.appcompat.app.AppCompatActivity
-          import com.ntech.cdi.ui.MapFragment
-          import java.io.*; import java.util.concurrent.Executors
+          # 2. LOGIKA UTAMA (MainActivity.kt)
+          w(f"{pkg}/MainActivity.kt", "package com.ntech.cdi\nimport android.os.*\nimport androidx.appcompat.app.AppCompatActivity\nimport com.ntech.cdi.ui.MapFragment\nclass MainActivity : AppCompatActivity() {\n    companion object { val config = CdiConfig() }\n    override fun onCreate(s: Bundle?) {\n        super.onCreate(s); setContentView(R.layout.activity_main)\n        supportFragmentManager.beginTransaction().replace(R.id.fragContainer, MapFragment()).commit()\n    }\n}")
 
-          class MainActivity : AppCompatActivity() {
-              companion object {
-                  val config = CdiConfig()
-                  val executor = Executors.newSingleThreadExecutor()
-                  var outStream: OutputStream? = null
-              }
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState); setContentView(R.layout.activity_main)
-                  // Tampilkan MapFragment langsung
-                  supportFragmentManager.beginTransaction().replace(R.id.fragContainer, MapFragment()).commit()
-              }
-              fun sendCmd(cmd: String) {
-                  executor.execute { outStream?.write(cmd.toByteArray()) }
-              }
-          }''')
+          # 3. KODE GRAFIK (MapFragment.kt)
+          w(f"{pkg}/ui/MapFragment.kt", "package com.ntech.cdi.ui\nimport android.graphics.Color\nimport android.os.Bundle\nimport android.view.*\nimport android.widget.*\nimport androidx.fragment.app.Fragment\nimport com.github.mikephil.charting.charts.LineChart\nimport com.github.mikephil.charting.data.*\nimport com.ntech.cdi.*\nclass MapFragment : Fragment() {\n    override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_map, c, false)\n    override fun onViewCreated(v: View, s: Bundle?) {\n        val chart = v.findViewById<LineChart>(R.id.chartMap)\n        val entries = ArrayList<Entry>()\n        MainActivity.config.map1.forEachIndexed { i, a -> entries.add(Entry(i.toFloat(), a.toFloat())) }\n        chart.data = LineData(LineDataSet(entries, \"Kurva NTECH\").apply { color = Color.RED })\n        chart.invalidate()\n    }\n}")
 
-          # 3. LOGIKA GRAFIK KURVA PENGAPIAN (MapFragment.kt)
-          w(f"{pkg}/ui/MapFragment.kt", '''package com.ntech.cdi.ui
-          import android.graphics.Color
-          import android.os.Bundle
-          import android.text.Editable
-          import android.text.InputType
-          import android.text.TextWatcher
-          import android.view.*
-          import android.widget.*
-          import androidx.fragment.app.Fragment
-          import com.github.mikephil.charting.charts.LineChart
-          import com.github.mikephil.charting.data.Entry
-          import com.github.mikephil.charting.data.LineData
-          import com.github.mikephil.charting.data.LineDataSet
-          import com.ntech.cdi.*
-          import java.util.*
+          # 4. FIX CONFIG GRADLE (Menghilangkan error backslash)
+          w("settings.gradle", "rootProject.name='NtechCDI'\ninclude ':app'")
+          w("gradle.properties", "android.useAndroidX=true\nandroid.enableJetifier=true")
+          w("build.gradle", "buildscript {\n    repositories { google(); mavenCentral() }\n    dependencies { classpath 'com.android.tools.build:gradle:8.2.0'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10' }\n}\nallprojects { repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } } }")
+          w("app/build.gradle", "plugins { id 'com.android.application'; id 'kotlin-android' }\nandroid {\n    compileSdk 34\n    namespace 'com.ntech.cdi'\n    defaultConfig { applicationId 'com.ntech.cdi'; minSdk 26; targetSdk 34; versionCode 1; versionName '1.0' }\n}\ndependencies {\n    implementation 'androidx.appcompat:appcompat:1.6.1'\n    implementation 'com.google.android.material:material:1.11.0'\n    implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'\n}")
 
-          class MapFragment : Fragment() {
-              private lateinit var tableLayout: TableLayout
-              private lateinit var lineChart: LineChart
-              private val edAngle = arrayOfNulls<EditText>(32)
-
-              override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
-                  return inflater.inflate(R.layout.fragment_map, container, false)
-              }
-
-              override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-                  super.onViewCreated(view, savedInstanceState)
-                  tableLayout = view.findViewById(R.id.tableMap)
-                  lineChart = view.findViewById(R.id.chartMap)
-                  
-                  initChart()
-                  buildTable()
-                  updateChart() // Tampilkan grafik awal
-
-                  view.findViewById<Button>(R.id.btnSaveMap).setOnClickListener { sendMap() }
-              }
-
-              private fun initChart() {
-                  lineChart.apply {
-                      description.isEnabled = false
-                      setTouchEnabled(false) // Nonaktifkan sentuhan di grafik agar tidak ganggu scroll
-                      setDrawGridBackground(false)
-                      xAxis.setTextColor(Color.WHITE)
-                      axisLeft.setTextColor(Color.WHITE)
-                      axisRight.isEnabled = false
-                      legend.textColor = Color.WHITE
-                      setBackgroundColor(Color.parseColor("#1A1A2E"))
-                  }
-              }
-
-              private fun updateChart() {
-                  val entries = ArrayList<Entry>()
-                  val map = MainActivity.config.map1
-                  for (i in 0..31) {
-                      entries.add(Entry(i.toFloat(), map[i].toFloat()))
-                  }
-
-                  val dataSet = LineDataSet(entries, "Kurva Pengapian (Map 1)").apply {
-                      color = Color.parseColor("#FF6B00") // Warna oranye khas NTECH
-                      setCircleColor(Color.WHITE)
-                      lineWidth = 2f
-                      circleRadius = 3f
-                      setDrawCircleHole(false)
-                      valueTextSize = 0f // Sembunyikan angka di titik grafik agar rapi
-                      setDrawFilled(true)
-                      fillColor = Color.parseColor("#4DFF6B00") // Transparan fill
-                  }
-
-                  lineChart.data = LineData(dataSet)
-                  lineChart.invalidate() // Refresh grafik
-              }
-
-              private fun buildTable() {
-                  tableLayout.removeAllViews()
-                  val config = MainActivity.config
-                  val map = config.map1 // Gunakan Map 1
-
-                  for (i in 0..31) {
-                      val row = TableRow(requireContext())
-                      
-                      val tvRpm = TextView(requireContext()).apply {
-                          text = if (i == 0) "Idle" else "${i * 500} RPM"
-                          setPadding(16, 8, 16, 8); setTextColor(Color.WHITE)
-                      }
-                      
-                      val etAngle = EditText(requireContext()).apply {
-                          setText(map[i].toString())
-                          inputType = InputType.TYPE_CLASS_NUMBER
-                          gravity = Gravity.CENTER
-                          setTextColor(Color.WHITE)
-                          background = null
-                          
-                          // Logika Update Grafik Real-time
-                          addTextChangedListener(object : TextWatcher {
-                              override fun afterTextChanged(s: Editable?) {
-                                  val angle = s.toString().toIntOrNull() ?: 0
-                                  config.map1[i] = angle // Update data model
-                                  updateChart() // Update grafik langsung
-                              }
-                              override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                              override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-                          })
-                      }
-                      edAngle[i] = etAngle
-                      row.addView(tvRpm); row.addView(etAngle)
-                      tableLayout.addView(row)
-                  }
-              }
-
-              private fun sendMap() {
-                  // Logika pengiriman map lewat Bluetooth seperti sebelumnya
-              }
-          }''')
-
-          # 4. KONFIGURASI BUILD (Mencegah Exit Code 1)
-          w("settings.gradle", "pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }\\ndependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)\\nrepositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } } }\\nrootProject.name='NtechCDI'\\ninclude ':app'")
-          w("gradle.properties", "android.useAndroidX=true\\nandroid.enableJetifier=true")
-          w("build.gradle", "buildscript{repositories{google();mavenCentral()};dependencies{classpath 'com.android.tools.build:gradle:8.2.0';classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.9.10'}}\\nallprojects{repositories{google();mavenCentral()}}")
-          w("app/build.gradle", "plugins{id 'com.android.application';id 'kotlin-android'}\\nandroid{compileSdk 34;namespace 'com.ntech.cdi';defaultConfig{applicationId 'com.ntech.cdi';minSdk 26;targetSdk 34;versionCode 1;versionName '1.0'}}\\ndependencies{implementation 'androidx.appcompat:appcompat:1.6.1';implementation 'com.google.android.material:material:1.11.0';implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'}")
-          
-          # 5. MANIFEST & LAYOUT (UI)
-          w("app/src/main/AndroidManifest.xml", '<?xml version="1.0" encoding="utf-8"?><manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi"><application android:label="NTECH" android:theme="@style/Theme.AppCompat.Light.NoActionBar"><activity android:name=".MainActivity" android:exported="true"><intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter></activity></application></manifest>')
-          w(f"{res}/layout/activity_main.xml", '<?xml version="1.0" encoding="utf-8"?><FrameLayout xmlns:android="http://schemas.android.com/apk/res/android" android:id="@+id/fragContainer" android:layout_width="match_parent" android:layout_height="match_parent" android:background="#000000"/>')
-          w(f"{res}/layout/fragment_map.xml", '<?xml version="1.0" encoding="utf-8"?><LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#0D0D0D" android:padding="16dp"><com.github.mikephil.charting.charts.LineChart android:id="@+id/chartMap" android:layout_width="match_parent" android:layout_height="250dp" android:layout_marginBottom="8dp"/><Button android:id="@+id/btnSaveMap" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="Send Map" android:layout_marginBottom="8dp"/><ScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"><TableLayout android:id="@+id/tableMap" android:layout_width="match_parent" android:layout_height="wrap_content" android:stretchColumns="1"/></ScrollView></LinearLayout>')
+          # 5. MANIFEST & LAYOUT
+          w("app/src/main/AndroidManifest.xml", "<?xml version='1.0' encoding='utf-8'?>\n<manifest xmlns:android='http://schemas.android.com/apk/res/android' package='com.ntech.cdi'>\n    <application android:label='NTECH CDI' android:theme='@style/Theme.AppCompat.Light.NoActionBar'>\n        <activity android:name='.MainActivity' android:exported='true'>\n            <intent-filter>\n                <action android:name='android.intent.action.MAIN'/>\n                <category android:name='android.intent.category.LAUNCHER'/>\n            </intent-filter>\n        </activity>\n    </application>\n</manifest>")
+          w(f"{res}/layout/activity_main.xml", "<?xml version='1.0' encoding='utf-8'?>\n<FrameLayout xmlns:android='http://schemas.android.com/apk/res/android' android:id='@+id/fragContainer' android:layout_width='match_parent' android:layout_height='match_parent' android:background='#000000'/>")
+          w(f"{res}/layout/fragment_map.xml", "<?xml version='1.0' encoding='utf-8'?>\n<LinearLayout xmlns:android='http://schemas.android.com/apk/res/android' android:layout_width='match_parent' android:layout_height='match_parent' android:orientation='vertical' android:background='#0D0D0D'>\n    <com.github.mikephil.charting.charts.LineChart android:id='@+id/chartMap' android:layout_width='match_parent' android:layout_height='300dp'/>\n</LinearLayout>")
           PYEOF
 
       - name: Set up JDK 17
@@ -199,7 +58,7 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload NTECH APK with Chart
+      - name: Upload NTECH APK
         uses: actions/upload-artifact@v4
         with:
           name: NTECH-CDI-Chart-v5.7F
