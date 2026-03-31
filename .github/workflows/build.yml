@@ -1,4 +1,4 @@
-name: Build NTECH CDI Ultimate Fix
+name: NTECH Final Fix Build
 
 on:
   push:
@@ -12,49 +12,36 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Create Project Directories
+      - name: Setup Project Structure
         run: |
           mkdir -p app/src/main/java/com/ntech/cdi/ui
           mkdir -p app/src/main/res/layout
+          mkdir -p app/src/main/res/values
 
-      - name: Create Gradle Settings
+      - name: Create Settings & Properties
         run: |
-          cat > settings.gradle << 'EOF'
-          pluginManagement {
-              repositories {
-                  google()
-                  mavenCentral()
-                  gradlePluginPortal()
-              }
-          }
-          dependencyResolutionManagement {
-              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-              repositories {
-                  google()
-                  mavenCentral()
-                  maven { url 'https://jitpack.io' }
-              }
-          }
-          rootProject.name = "NtechCDI"
-          include ':app'
-          EOF
+          echo "include ':app'" > settings.gradle
+          echo "rootProject.name = 'NtechCDI'" >> settings.gradle
+          
+          echo "android.useAndroidX=true" > gradle.properties
+          echo "android.enableJetifier=true" >> gradle.properties
 
-      - name: Create Root Build.gradle
+      - name: Create Root Build Gradle
         run: |
           cat > build.gradle << 'EOF'
-          plugins {
-              id 'com.android.application' version '8.1.1' apply false
-              id 'org.jetbrains.kotlin.android' version '1.8.20' apply false
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.1.1' }
+          }
+          allprojects {
+              repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }
           }
           EOF
 
-      - name: Create App Build.gradle
+      - name: Create App Build Gradle
         run: |
           cat > app/build.gradle << 'EOF'
-          plugins {
-              id 'com.android.application'
-              id 'org.jetbrains.kotlin.android'
-          }
+          apply plugin: 'com.android.application'
           android {
               namespace 'com.ntech.cdi'
               compileSdk 34
@@ -65,36 +52,24 @@ jobs:
                   versionCode 1
                   versionName "1.0"
               }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
-              kotlinOptions {
-                  jvmTarget = '17'
-              }
           }
           dependencies {
-              implementation("androidx.core:core-ktx:1.10.1")
-              implementation("androidx.appcompat:appcompat:1.6.1")
-              implementation("com.google.android.material:material:1.10.0")
-              implementation("com.github.PhilJay:MPAndroidChart:v3.1.0")
+              implementation 'androidx.appcompat:appcompat:1.6.1'
+              implementation 'com.google.android.material:material:1.10.0'
+              implementation 'com.github.PhilJay:MPAndroidChart:v3.1.0'
           }
           EOF
 
-      - name: Create Gradle Properties
+      - name: Create Basic Resources
         run: |
-          cat > gradle.properties << 'EOF'
-          android.useAndroidX=true
-          android.enableJetifier=true
-          org.gradle.jvmargs=-Xmx2048m
+          cat > app/src/main/res/values/themes.xml << 'EOF'
+          <resources><style name="Theme.NTECH" parent="Theme.AppCompat.Light.NoActionBar" /></resources>
           EOF
-
-      - name: Create Manifest & Layouts
-        run: |
+          
           cat > app/src/main/AndroidManifest.xml << 'EOF'
           <?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <application android:label="NTECH" android:theme="@style/Theme.AppCompat.Light.NoActionBar">
+              <application android:label="NTECH" android:theme="@style/Theme.NTECH">
                   <activity android:name=".MainActivity" android:exported="true">
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN" />
@@ -104,75 +79,22 @@ jobs:
               </application>
           </manifest>
           EOF
-          
+
+      - name: Create UI Files
+        run: |
           cat > app/src/main/res/layout/act_main.xml << 'EOF'
           <FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:id="@+id/frag"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:background="#000000"/>
+              android:id="@+id/container" android:layout_width="match_parent" android:layout_height="match_parent" />
           EOF
           
-          cat > app/src/main/res/layout/frag_map.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent"
-              android:layout_height="match_parent"
-              android:orientation="vertical">
-              <com.github.mikephil.charting.charts.LineChart
-                  android:id="@+id/chart"
-                  android:layout_width="match_parent"
-                  android:layout_height="300dp"/>
-          </LinearLayout>
-          EOF
-
-      - name: Create Kotlin Source Code
-        run: |
-          cat > app/src/main/java/com/ntech/cdi/CdiConfig.kt << 'EOF'
-          package com.ntech.cdi
-          class CdiConfig { var map1 = IntArray(32) { 15 } }
-          EOF
-          
-          cat > app/src/main/java/com/ntech/cdi/MainActivity.kt << 'EOF'
-          package com.ntech.cdi
-          import android.os.Bundle
-          import androidx.appcompat.app.AppCompatActivity
-          import com.ntech.cdi.ui.MapFragment
-          class MainActivity : AppCompatActivity() {
-              override fun onCreate(savedInstanceState: Bundle?) {
-                  super.onCreate(savedInstanceState)
-                  setContentView(R.layout.act_main)
-                  supportFragmentManager.beginTransaction().replace(R.id.frag, MapFragment()).commit()
-              }
-          }
-          EOF
-          
-          cat > app/src/main/java/com/ntech/cdi/ui/MapFragment.kt << 'EOF'
-          package com.ntech.cdi.ui
-          import android.graphics.Color
-          import android.os.Bundle
-          import android.view.LayoutInflater
-          import android.view.View
-          import android.view.ViewGroup
-          import androidx.fragment.app.Fragment
-          import com.github.mikephil.charting.charts.LineChart
-          import com.github.mikephil.charting.data.Entry
-          import com.github.mikephil.charting.data.LineData
-          import com.github.mikephil.charting.data.LineDataSet
-          import com.ntech.cdi.R
-          class MapFragment : Fragment() {
-              override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View? {
-                  return inflater.inflate(R.layout.frag_map, container, false)
-              }
-              override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
-                  val chart = view.findViewById<LineChart>(R.id.chart)
-                  val entries = (0..31).map { Entry(it.toFloat(), 15f) }
-                  val set = LineDataSet(entries, "Kurva NTECH").apply {
-                      color = Color.RED
-                      setCircleColor(Color.WHITE)
-                  }
-                  chart.data = LineData(set)
-                  chart.setBackgroundColor(Color.BLACK)
-                  chart.invalidate()
+          cat > app/src/main/java/com/ntech/cdi/MainActivity.java << 'EOF'
+          package com.ntech.cdi;
+          import android.os.Bundle;
+          import androidx.appcompat.app.AppCompatActivity;
+          public class MainActivity extends AppCompatActivity {
+              @Override protected void onCreate(Bundle s) {
+                  super.onCreate(s);
+                  setContentView(R.layout.act_main);
               }
           }
           EOF
@@ -183,13 +105,13 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Build APK File
+      - name: Build APK
         run: |
-          gradle wrapper --gradle-version 8.4
+          chmod +x gradlew || gradle wrapper --gradle-version 8.4
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload NTECH APK
         uses: actions/upload-artifact@v4
         with:
-          name: NTECH-CDI-Final-APK
+          name: NTECH-CDI-App
           path: app/build/outputs/apk/debug/app-debug.apk
