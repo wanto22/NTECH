@@ -36,7 +36,7 @@ jobs:
           PKG = B + "/app/src/main/java/com/ntech/cdi"
           UI  = PKG + "/ui"
 
-          # 1. DATA LOGIC (CdiConfig.kt) - SAMA
+          # 1. DATA LOGIC (CdiConfig.kt)
           w(PKG + "/CdiConfig.kt", r"""package com.ntech.cdi
           class CdiConfig {
               val map1 = IntArray(32) { 15 }; val map2 = IntArray(32) { 15 }; val map3 = IntArray(32) { 15 }
@@ -181,7 +181,7 @@ jobs:
           }
           """)
 
-          # 3. FRAGMENTS (dengan thread safety)
+          # 3. FRAGMENTS
           w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
           import android.os.Bundle
           import android.view.*
@@ -361,8 +361,7 @@ jobs:
       - name: Build APK
         run: |
           cd NtechCDI
-          chmod +x gradlew 2>/dev/null || true
-          ./gradlew assembleDebug --no-daemon
+          gradle assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
