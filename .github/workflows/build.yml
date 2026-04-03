@@ -18,6 +18,11 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: 8.1.1
+
       - name: Write Android Source Code
         run: |
           python3 - << 'PYEOF'
@@ -31,7 +36,7 @@ jobs:
           PKG = B + "/app/src/main/java/com/ntech/cdi"
           UI  = PKG + "/ui"
 
-          # 1. DATA LOGIC (CdiConfig.kt)
+          # 1. DATA LOGIC (CdiConfig.kt) - SAMA
           w(PKG + "/CdiConfig.kt", r"""package com.ntech.cdi
           class CdiConfig {
               val map1 = IntArray(32) { 15 }; val map2 = IntArray(32) { 15 }; val map3 = IntArray(32) { 15 }
@@ -58,14 +63,17 @@ jobs:
           }
           """)
 
-          # 2. MAIN ACTIVITY (Bluetooth & Sync)
+          # 2. MAIN ACTIVITY (Bluetooth + Permission)
           w(PKG + "/MainActivity.kt", r"""package com.ntech.cdi
           import android.Manifest
           import android.annotation.SuppressLint
           import android.bluetooth.*
+          import android.content.pm.PackageManager
           import android.os.*
           import android.widget.*
           import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
           import com.ntech.cdi.ui.*
           import java.util.UUID
 
@@ -80,15 +88,35 @@ jobs:
               }
 
               private val frags by lazy { arrayOf(MonitorFragment(), MapFragment(), SettingsFragment()) }
+              private val REQUEST_BT_PERM = 1001
               
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
-                  findViewById<TextView>(R.id.btnConnect).setOnClickListener { if(!isConnected) scanBt() else disconnect() }
+                  findViewById<TextView>(R.id.btnConnect).setOnClickListener { if(!isConnected) checkPermissionsAndScan() else disconnect() }
                   findViewById<TextView>(R.id.navMonitor).setOnClickListener { showTab(0) }
                   findViewById<TextView>(R.id.navMap).setOnClickListener { showTab(1) }
                   findViewById<TextView>(R.id.navSettings).setOnClickListener { showTab(2) }
                   showTab(0)
+              }
+
+              private fun checkPermissionsAndScan() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQUEST_BT_PERM)
+                          return
+                      }
+                  }
+                  scanBt()
+              }
+
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  if (requestCode == REQUEST_BT_PERM && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                      scanBt()
+                  } else {
+                      Toast.makeText(this, "Bluetooth permission required", Toast.LENGTH_SHORT).show()
+                  }
               }
 
               private fun showTab(i: Int) {
@@ -100,14 +128,25 @@ jobs:
 
               @SuppressLint("MissingPermission")
               private fun scanBt() {
-                  val ba = BluetoothAdapter.getDefaultAdapter() ?: return
-                  val dev = ba.bondedDevices.find { it.name.contains("HC") } ?: return
+                  val ba = BluetoothAdapter.getDefaultAdapter()
+                  if (ba == null) {
+                      runOnUiThread { Toast.makeText(this, "Device doesn't support Bluetooth", Toast.LENGTH_SHORT).show() }
+                      return
+                  }
+                  val dev = ba.bondedDevices.find { it.name?.contains("HC") == true }
+                  if (dev == null) {
+                      runOnUiThread { Toast.makeText(this, "No HC-XX device paired", Toast.LENGTH_SHORT).show() }
+                      return
+                  }
                   Thread {
                       try {
                           socket = dev.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
                           socket?.connect()
                           isConnected = true
-                          runOnUiThread { findViewById<TextView>(R.id.tvStatus).text = "Connected: ${dev.name}" }
+                          runOnUiThread {
+                              findViewById<TextView>(R.id.tvStatus).text = "Connected: ${dev.name}"
+                              Toast.makeText(this, "Connected", Toast.LENGTH_SHORT).show()
+                          }
                           sendCmd("GET\n")
                           val reader = socket?.inputStream?.bufferedReader()
                           while(isConnected) {
@@ -116,19 +155,33 @@ jobs:
                                   runOnUiThread { listeners.forEach { it() } }
                               }
                           }
-                      } catch(e: Exception) { isConnected = false }
+                      } catch(e: Exception) {
+                          isConnected = false
+                          runOnUiThread {
+                              findViewById<TextView>(R.id.tvStatus).text = "Connection failed"
+                              Toast.makeText(this, "Connection error", Toast.LENGTH_SHORT).show()
+                          }
+                      }
                   }.start()
               }
 
-              fun sendCmd(s: String) { Thread { try { socket?.outputStream?.write(s.toByteArray()) } catch(e: Exception) {} }.start() }
+              fun sendCmd(s: String) {
+                  Thread {
+                      try {
+                          socket?.outputStream?.write(s.toByteArray())
+                      } catch(e: Exception) { e.printStackTrace() }
+                  }.start()
+              }
+              
               private fun disconnect() { 
-                  isConnected = false; socket?.close()
+                  isConnected = false
+                  try { socket?.close() } catch(e: Exception) {}
                   runOnUiThread { findViewById<TextView>(R.id.tvStatus).text = "Disconnected" }
               }
           }
           """)
 
-          # 3. FRAGMENTS (Monitor, Map, Settings)
+          # 3. FRAGMENTS (dengan thread safety)
           w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
           import android.os.Bundle
           import android.view.*
@@ -137,7 +190,7 @@ jobs:
           import com.ntech.cdi.*
 
           class MonitorFragment : Fragment() {
-              private val updateTask = { updateUI() }
+              private val updateTask = { view?.post { updateUI() } }
               override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_monitor, c, false)
               override fun onViewCreated(v: View, s: Bundle?) {
                   MainActivity.register(updateTask)
@@ -161,17 +214,19 @@ jobs:
           import com.ntech.cdi.*
 
           class MapFragment : Fragment() {
+              private lateinit var tableLayout: TableLayout
               private val ets = arrayOfNulls<EditText>(32)
-              private val updateTask = { refresh() }
+              private val updateTask = { view?.post { refresh() } }
+              
               override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_map, c, false)
               override fun onViewCreated(v: View, s: Bundle?) {
-                  val tbl = v.findViewById<TableLayout>(R.id.tbl1)
+                  tableLayout = v.findViewById(R.id.tbl1)
                   val cfg = MainActivity.config
                   for(i in 0..31) {
                       val row = TableRow(context)
                       val tv = TextView(context).apply { text = "${i*500} RPM"; setPadding(10,10,10,10); setTextColor(0xFFFFFFFF.toInt()) }
                       val et = EditText(context).apply { setText(cfg.map1[i].toString()); setTextColor(0xFFFFFFFF.toInt()); setPadding(10,10,10,10); setInputType(2) }
-                      ets[i] = et; row.addView(tv); row.addView(et); tbl.addView(row)
+                      ets[i] = et; row.addView(tv); row.addView(et); tableLayout.addView(row)
                   }
                   MainActivity.register(updateTask)
                   v.findViewById<Button>(R.id.btnSend).setOnClickListener {
@@ -195,13 +250,17 @@ jobs:
           import com.ntech.cdi.*
 
           class SettingsFragment : Fragment() {
-              private val updateTask = { load() }
+              private val updateTask = { view?.post { load() } }
               override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_settings, c, false)
               override fun onViewCreated(v: View, s: Bundle?) {
                   MainActivity.register(updateTask)
                   v.findViewById<Button>(R.id.btnSaveLim).setOnClickListener {
                       val lim = v.findViewById<EditText>(R.id.etLim).text.toString()
                       (activity as? MainActivity)?.sendCmd("LIM:$lim\n")
+                  }
+                  v.findViewById<Button>(R.id.btnSaveAng).setOnClickListener {
+                      val ang = v.findViewById<EditText>(R.id.etAng).text.toString()
+                      (activity as? MainActivity)?.sendCmd("ANG:$ang\n")
                   }
               }
               private fun load() {
@@ -259,6 +318,7 @@ jobs:
               <Button android:id="@+id/btnSaveLim" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE LIMITER"/>
               <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pulser Angle" android:textColor="#FFF" android:layout_marginTop="20dp"/>
               <EditText android:id="@+id/etAng" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFF" android:inputType="number"/>
+              <Button android:id="@+id/btnSaveAng" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE ANGLE"/>
           </LinearLayout>
           EOF
 
@@ -268,7 +328,8 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi">
               <uses-permission android:name="android.permission.BLUETOOTH"/>
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
-              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" android:maxSdkVersion="32"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:maxSdkVersion="32"/>
               <application android:theme="@style/AppTheme" android:label="@string/app_name">
                   <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
                       <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
@@ -287,8 +348,11 @@ jobs:
 
           cat > NtechCDI/app/build.gradle << 'EOF'
           plugins { id 'com.android.application'; id 'kotlin-android' }
-          android { namespace 'com.ntech.cdi'; compileSdk 34; defaultConfig { minSdk 26; targetSdk 34 } }
-          dependencies { implementation 'androidx.appcompat:appcompat:1.6.1'; implementation 'com.google.android.material:material:1.9.0' }
+          android { namespace 'com.ntech.cdi'; compileSdk 34; defaultConfig { minSdk 26; targetSdk 34 }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = '17' }
+          }
+          dependencies { implementation 'androidx.appcompat:appcompat:1.6.1'; implementation 'com.google.android.material:material:1.9.0'; implementation "org.jetbrains.kotlin:kotlin-stdlib:1.8.20" }
           EOF
 
           echo "include ':app'" > NtechCDI/settings.gradle
@@ -297,7 +361,7 @@ jobs:
       - name: Build APK
         run: |
           cd NtechCDI
-          gradle wrapper --gradle-version 8.1.1
+          chmod +x gradlew 2>/dev/null || true
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
