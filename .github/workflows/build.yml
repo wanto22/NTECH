@@ -42,6 +42,7 @@ jobs:
 
           # ── CdiConfig.kt ─────────────────────────────────────
           w(PKG + "/CdiConfig.kt", r"""package com.ntech.cdi
+
           class CdiConfig {
               val map1 = IntArray(32) { defaultMap1[it] }
               val map2 = IntArray(32) { defaultMap2[it] }
@@ -54,6 +55,7 @@ jobs:
               var activeMap = 1
               var edge = 0
               var lastRpm = 0
+
               companion object {
                   val defaultMap1 = intArrayOf(0,8,15,20,24,28,30,32,34,34,34,34,34,34,34,34,34,34,34,34,34,32,30,27,23,19,17,15,15,15,10,10)
                   val defaultMap2 = intArrayOf(0,6,12,18,22,26,28,30,32,32,32,32,32,32,32,32,32,32,32,30,28,26,24,22,20,17,15,12,12,12,8,8)
@@ -62,22 +64,27 @@ jobs:
                   fun tickToUs(tick: Int) = tick / 2
                   fun usToTick(us: Int) = us * 2
               }
+
               fun activeMapArray() = when (activeMap) { 2 -> map2; 3 -> map3; else -> map1 }
-              fun parseLine(line: String) {
-                  when {
-                      line.startsWith("RPM:") -> lastRpm = line.removePrefix("RPM:").toIntOrNull() ?: lastRpm
-                      line.startsWith("ACT:") -> activeMap = line.removePrefix("ACT:").toIntOrNull() ?: activeMap
-                      line.startsWith("LIM:") -> rpmLimiter = line.removePrefix("LIM:").toIntOrNull() ?: rpmLimiter
-                      line.startsWith("ANG:") -> pulserAngle = line.removePrefix("ANG:").toIntOrNull() ?: pulserAngle
-                      line.startsWith("SCR:") -> scrPulse = line.removePrefix("SCR:").toIntOrNull() ?: scrPulse
-                      line.startsWith("RBL:") -> rumbleRpm = line.removePrefix("RBL:").toIntOrNull() ?: rumbleRpm
-                      line.startsWith("RSK:") -> rumbleSkip = line.removePrefix("RSK:").toIntOrNull() ?: rumbleSkip
-                      line.startsWith("EDG:") -> edge = line.removePrefix("EDG:").toIntOrNull() ?: edge
-                      line.startsWith("M1:") -> line.removePrefix("M1:").split(",").forEachIndexed { i, v -> if (i < 32) map1[i] = v.trim().toIntOrNull() ?: map1[i] }
-                      line.startsWith("M2:") -> line.removePrefix("M2:").split(",").forEachIndexed { i, v -> if (i < 32) map2[i] = v.trim().toIntOrNull() ?: map2[i] }
-                      line.startsWith("M3:") -> line.removePrefix("M3:").split(",").forEachIndexed { i, v -> if (i < 32) map3[i] = v.trim().toIntOrNull() ?: map3[i] }
+
+              // Kembalikan true jika line adalah config (bukan RPM live)
+              fun parseLine(line: String): Boolean {
+                  return when {
+                      line.startsWith("RPM:") -> { lastRpm = line.removePrefix("RPM:").toIntOrNull() ?: lastRpm; false }
+                      line.startsWith("ACT:") -> { activeMap = line.removePrefix("ACT:").toIntOrNull() ?: activeMap; false }
+                      line.startsWith("LIM:") -> { rpmLimiter = line.removePrefix("LIM:").toIntOrNull() ?: rpmLimiter; true }
+                      line.startsWith("ANG:") -> { pulserAngle = line.removePrefix("ANG:").toIntOrNull() ?: pulserAngle; true }
+                      line.startsWith("SCR:") -> { scrPulse = line.removePrefix("SCR:").toIntOrNull() ?: scrPulse; true }
+                      line.startsWith("RBL:") -> { rumbleRpm = line.removePrefix("RBL:").toIntOrNull() ?: rumbleRpm; true }
+                      line.startsWith("RSK:") -> { rumbleSkip = line.removePrefix("RSK:").toIntOrNull() ?: rumbleSkip; true }
+                      line.startsWith("EDG:") -> { edge = line.removePrefix("EDG:").toIntOrNull() ?: edge; true }
+                      line.startsWith("M1:") -> { line.removePrefix("M1:").split(",").forEachIndexed { i, v -> if (i < 32) map1[i] = v.trim().toIntOrNull() ?: map1[i] }; true }
+                      line.startsWith("M2:") -> { line.removePrefix("M2:").split(",").forEachIndexed { i, v -> if (i < 32) map2[i] = v.trim().toIntOrNull() ?: map2[i] }; true }
+                      line.startsWith("M3:") -> { line.removePrefix("M3:").split(",").forEachIndexed { i, v -> if (i < 32) map3[i] = v.trim().toIntOrNull() ?: map3[i] }; true }
+                      else -> false
                   }
               }
+
               fun buildMapCmd(prefix: String, arr: IntArray): String {
                   return prefix + ":" + arr.joinToString(",") + "\r\n"
               }
@@ -85,7 +92,10 @@ jobs:
           """)
 
           # ── MainActivity.kt ───────────────────────────────────
+          # FIX: pakai List callbacks bukan single var
+          # Semua fragment bisa register sekaligus
           w(PKG + "/MainActivity.kt", r"""package com.ntech.cdi
+
           import android.Manifest
           import android.annotation.SuppressLint
           import android.bluetooth.BluetoothAdapter
@@ -111,13 +121,27 @@ jobs:
           import java.util.UUID
 
           class MainActivity : AppCompatActivity() {
+
               companion object {
                   var socket: BluetoothSocket? = null
                   var outStream: OutputStream? = null
                   var inStream: InputStream? = null
                   var isConnected = false
-                  var onDataReceived: ((String) -> Unit)? = null
                   val config = CdiConfig()
+
+                  // FIX: gunakan map callback berdasarkan tag
+                  // sehingga Monitor dan Settings bisa aktif bersamaan
+                  private val callbacks = mutableMapOf<String, (String, Boolean) -> Unit>()
+
+                  fun registerCallback(tag: String, cb: (line: String, isConfig: Boolean) -> Unit) {
+                      callbacks[tag] = cb
+                  }
+                  fun unregisterCallback(tag: String) {
+                      callbacks.remove(tag)
+                  }
+                  fun dispatchLine(line: String, isConfig: Boolean) {
+                      callbacks.values.forEach { it(line, isConfig) }
+                  }
               }
 
               private lateinit var tvStatus: TextView
@@ -143,16 +167,16 @@ jobs:
               override fun onCreate(savedInstanceState: Bundle?) {
                   super.onCreate(savedInstanceState)
                   setContentView(R.layout.activity_main)
-                  tvStatus = findViewById(R.id.tvStatus)
+                  tvStatus   = findViewById(R.id.tvStatus)
                   btnConnect = findViewById(R.id.btnConnect)
-                  tvInfo = findViewById(R.id.tvInfo)
+                  tvInfo     = findViewById(R.id.tvInfo)
                   navMonitor = findViewById(R.id.navMonitor)
-                  navMap = findViewById(R.id.navMap)
-                  navSettings = findViewById(R.id.navSettings)
+                  navMap     = findViewById(R.id.navMap)
+                  navSettings= findViewById(R.id.navSettings)
                   getSharedPreferences("ntech", MODE_PRIVATE).getString("bg_uri", null)?.let { applyBg(it) }
-                  btnConnect.setOnClickListener { if (isConnected) disconnect() else checkBt() }
-                  navMonitor.setOnClickListener { showTab(0) }
-                  navMap.setOnClickListener { showTab(1) }
+                  btnConnect.setOnClickListener  { if (isConnected) disconnect() else checkBt() }
+                  navMonitor.setOnClickListener  { showTab(0) }
+                  navMap.setOnClickListener      { showTab(1) }
                   navSettings.setOnClickListener { showTab(2) }
                   showTab(0)
                   updateUI()
@@ -161,8 +185,7 @@ jobs:
               fun applyBg(uriStr: String) {
                   try {
                       val bmp = BitmapFactory.decodeStream(contentResolver.openInputStream(Uri.parse(uriStr)))
-                      val container = findViewById<FrameLayout>(R.id.fragContainer)
-                      container.background = BitmapDrawable(resources, bmp)
+                      findViewById<FrameLayout>(R.id.fragContainer).background = BitmapDrawable(resources, bmp)
                   } catch (e: Exception) { }
               }
 
@@ -218,7 +241,7 @@ jobs:
                           runOnUiThread {
                               tvStatus.text = "Gagal"
                               tvStatus.setTextColor(0xFFFF3333.toInt())
-                              Toast.makeText(this, e.message ?: "Error", Toast.LENGTH_LONG).show()
+                              Toast.makeText(this, e.message ?: "Error BT", Toast.LENGTH_LONG).show()
                           }
                       }
                   }.start()
@@ -227,7 +250,7 @@ jobs:
               private fun startReading() {
                   Thread {
                       val buf = ByteArray(256)
-                      val sb = StringBuilder()
+                      val sb  = StringBuilder()
                       while (isConnected) {
                           try {
                               val n = inStream?.read(buf) ?: break
@@ -238,8 +261,8 @@ jobs:
                                       val line = sb.substring(0, idx).trim()
                                       sb.delete(0, idx + 1)
                                       if (line.isNotEmpty()) {
-                                          config.parseLine(line)
-                                          runOnUiThread { onDataReceived?.invoke(line) }
+                                          val isConfig = config.parseLine(line)
+                                          runOnUiThread { dispatchLine(line, isConfig) }
                                       }
                                   }
                               }
@@ -274,7 +297,9 @@ jobs:
           """)
 
           # ── MonitorFragment.kt ────────────────────────────────
+          # FIX: register dengan tag unik, update setiap ada data
           w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
+
           import android.os.Bundle
           import android.view.LayoutInflater
           import android.view.View
@@ -287,6 +312,7 @@ jobs:
           import com.ntech.cdi.R
 
           class MonitorFragment : Fragment() {
+
               private lateinit var tvRpm: TextView
               private lateinit var rpmBar: ProgressBar
               private lateinit var tvMap: TextView
@@ -310,14 +336,21 @@ jobs:
                   tvEdge  = view.findViewById(R.id.tvEdge)
                   tvScr   = view.findViewById(R.id.tvScr)
                   tvMax   = view.findViewById(R.id.tvMax)
+
                   view.findViewById<TextView>(R.id.btnReset).setOnClickListener {
                       maxRpm = 0; tvMax.text = "Max: 0 RPM"
                   }
                   view.findViewById<TextView>(R.id.btnRefresh).setOnClickListener {
                       (activity as? MainActivity)?.sendCmd("GET\r\n")
                   }
+
                   updateDisplay()
-                  MainActivity.onDataReceived = { _ -> activity?.runOnUiThread { updateDisplay() } }
+
+                  // FIX: register callback dengan tag "monitor"
+                  // Callback dipanggil setiap ada data apapun (RPM atau config)
+                  MainActivity.registerCallback("monitor") { _, _ ->
+                      activity?.runOnUiThread { updateDisplay() }
+                  }
               }
 
               private fun updateDisplay() {
@@ -341,13 +374,14 @@ jobs:
 
               override fun onDestroyView() {
                   super.onDestroyView()
-                  MainActivity.onDataReceived = null
+                  MainActivity.unregisterCallback("monitor")
               }
           }
           """)
 
           # ── MapFragment.kt ────────────────────────────────────
           w(UI + "/MapFragment.kt", r"""package com.ntech.cdi.ui
+
           import android.graphics.Color
           import android.graphics.Typeface
           import android.os.Bundle
@@ -365,6 +399,7 @@ jobs:
           import com.ntech.cdi.R
 
           class MapFragment : Fragment() {
+
               private val et1 = arrayOfNulls<EditText>(32)
               private val et2 = arrayOfNulls<EditText>(32)
               private val et3 = arrayOfNulls<EditText>(32)
@@ -402,7 +437,13 @@ jobs:
                       Toast.makeText(context, "Semua map terkirim", Toast.LENGTH_SHORT).show()
                   }
                   showMap(cfg.activeMap)
-                  MainActivity.onDataReceived = { _ -> activity?.runOnUiThread { refreshTables() } }
+
+                  // FIX: hanya refresh tabel kalau yang datang adalah data map (isConfig=true)
+                  MainActivity.registerCallback("map") { _, isConfig ->
+                      if (isConfig) {
+                          activity?.runOnUiThread { refreshTables() }
+                      }
+                  }
               }
 
               private fun buildTable(table: TableLayout, ets: Array<EditText?>, arr: IntArray) {
@@ -412,7 +453,7 @@ jobs:
                   header.addView(makeHeader("Advance"))
                   table.addView(header)
                   for (i in 0 until 32) {
-                      val row = TableRow(requireContext())
+                      val row   = TableRow(requireContext())
                       val tvRpm = TextView(requireContext()).apply {
                           text = CdiConfig.rpmLabel(i)
                           setPadding(12, 8, 12, 8)
@@ -424,11 +465,11 @@ jobs:
                           })
                       }
                       val idx = i
-                      val et = EditText(requireContext()).apply {
+                      val et  = EditText(requireContext()).apply {
                           layoutParams = TableRow.LayoutParams(180, ViewGroup.LayoutParams.WRAP_CONTENT)
                           inputType = InputType.TYPE_CLASS_NUMBER
-                          gravity = Gravity.CENTER
-                          textSize = 14f
+                          gravity   = Gravity.CENTER
+                          textSize  = 14f
                           setTypeface(typeface, Typeface.BOLD)
                           setText(arr[idx].toString())
                           setTextColor(Color.WHITE)
@@ -494,13 +535,15 @@ jobs:
 
               override fun onDestroyView() {
                   super.onDestroyView()
-                  MainActivity.onDataReceived = null
+                  MainActivity.unregisterCallback("map")
               }
           }
           """)
 
           # ── SettingsFragment.kt ───────────────────────────────
+          # FIX: loadConfig HANYA dipanggil saat isConfig=true (bukan saat RPM update)
           w(UI + "/SettingsFragment.kt", r"""package com.ntech.cdi.ui
+
           import android.os.Bundle
           import android.view.LayoutInflater
           import android.view.View
@@ -512,6 +555,7 @@ jobs:
           import com.ntech.cdi.R
 
           class SettingsFragment : Fragment() {
+
               private lateinit var etLim: EditText
               private lateinit var etAng: EditText
               private lateinit var etScr: EditText
@@ -550,7 +594,7 @@ jobs:
                   }
                   view.findViewById<TextView>(R.id.btnAng).setOnClickListener {
                       val num = etAng.text.toString().toIntOrNull()
-                      if (num != null && num in 30..120) sendSetting("ANG:$num\r\n", "Angle $num derajat")
+                      if (num != null && num in 30..120) sendSetting("ANG:$num\r\n", "Angle $num")
                       else toast("Range: 30-120")
                   }
                   view.findViewById<TextView>(R.id.btnScr).setOnClickListener {
@@ -562,7 +606,7 @@ jobs:
                       }
                   }
                   view.findViewById<TextView>(R.id.btnEdge).setOnClickListener {
-                      val edgeVal = if (rbFalling.isChecked) 0 else 1
+                      val edgeVal  = if (rbFalling.isChecked) 0 else 1
                       val edgeName = if (rbFalling.isChecked) "Falling" else "Rising"
                       sendSetting("EDG:$edgeVal\r\n", "Edge $edgeName")
                   }
@@ -582,7 +626,13 @@ jobs:
                       (activity as? MainActivity)?.changeBg()
                   }
 
-                  MainActivity.onDataReceived = { _ -> activity?.runOnUiThread { loadConfig() } }
+                  // FIX: loadConfig HANYA saat isConfig=true
+                  // Saat RPM datang (isConfig=false) → TIDAK reset EditText
+                  MainActivity.registerCallback("settings") { _, isConfig ->
+                      if (isConfig) {
+                          activity?.runOnUiThread { loadConfig() }
+                      }
+                  }
               }
 
               private fun loadConfig() {
@@ -604,7 +654,7 @@ jobs:
 
               override fun onDestroyView() {
                   super.onDestroyView()
-                  MainActivity.onDataReceived = null
+                  MainActivity.unregisterCallback("settings")
               }
           }
           """)
@@ -615,7 +665,7 @@ jobs:
       - name: Write XML resources
         run: |
           python3 - << 'PYEOF'
-          import os
+          import os, struct, zlib, math
 
           def w(path, content):
               os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -832,64 +882,38 @@ jobs:
           # Drawables
           dr = RES + "/drawable"
           os.makedirs(dr, exist_ok=True)
-          shapes = [("btn_orange","#FF6B00"),("btn_green","#388E3C"),("btn_red","#C62828"),("btn_purple","#6A1B9A")]
-          for name, color in shapes:
-              w(dr + "/" + name + ".xml",
-                '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="' + color + '"/><corners android:radius="8dp"/></shape>')
-          w(dr + "/card_bg.xml",
-            '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#1A1A2E"/><corners android:radius="12dp"/></shape>')
-          w(dr + "/btn_outline.xml",
-            '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><stroke android:width="1dp" android:color="#FF6B00"/><corners android:radius="8dp"/><solid android:color="#00000000"/></shape>')
-          w(dr + "/input_bg.xml",
-            '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#0D0D0D"/><stroke android:width="1dp" android:color="#333333"/><corners android:radius="6dp"/></shape>')
+          for name, color in [("btn_orange","#FF6B00"),("btn_green","#388E3C"),("btn_red","#C62828"),("btn_purple","#6A1B9A")]:
+              w(dr+"/"+name+".xml", '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="'+color+'"/><corners android:radius="8dp"/></shape>')
+          w(dr+"/card_bg.xml",   '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#1A1A2E"/><corners android:radius="12dp"/></shape>')
+          w(dr+"/btn_outline.xml",'<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><stroke android:width="1dp" android:color="#FF6B00"/><corners android:radius="8dp"/><solid android:color="#00000000"/></shape>')
+          w(dr+"/input_bg.xml",  '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#0D0D0D"/><stroke android:width="1dp" android:color="#333333"/><corners android:radius="6dp"/></shape>')
 
-          # Launcher icons
-          import struct, zlib, math
           def make_icon(sz):
-              def ck(n, d):
-                  c = n + d
-                  return struct.pack('>I', len(d)) + c + struct.pack('>I', zlib.crc32(c) & 0xffffffff)
-              cx = cy = sz // 2
-              r = sz // 2 - 2
-              rows = []
+              def ck(n,d): c=n+d; return struct.pack('>I',len(d))+c+struct.pack('>I',zlib.crc32(c)&0xffffffff)
+              cx=cy=sz//2; r=sz//2-2; rows=[]
               for y in range(sz):
-                  row = b'\x00'
+                  row=b'\x00'
                   for x in range(sz):
-                      dx, dy = x - cx, y - cy
-                      dist = math.sqrt(dx*dx + dy*dy)
-                      if dist > r:
-                          row += b'\x0D\x0D\x0D'
-                      elif dist > r - 8:
-                          row += b'\xFF\x6B\x00'
+                      dx,dy=x-cx,y-cy; dist=math.sqrt(dx*dx+dy*dy)
+                      if dist>r: row+=b'\x0D\x0D\x0D'
+                      elif dist>r-8: row+=b'\xFF\x6B\x00'
                       else:
-                          ang = math.atan2(dy, dx)
-                          tooth = int((ang + math.pi) / (2 * math.pi) * 12)
-                          if dist > r - 18 and tooth % 2 == 0:
-                              row += b'\xFF\x6B\x00'
-                          elif dist < r * 0.4:
-                              row += b'\xFF\x6B\x00'
-                          else:
-                              row += b'\x1A\x1A\x2E'
+                          ang=math.atan2(dy,dx); tooth=int((ang+math.pi)/(2*math.pi)*12)
+                          if dist>r-18 and tooth%2==0: row+=b'\xFF\x6B\x00'
+                          elif dist<r*0.4: row+=b'\xFF\x6B\x00'
+                          else: row+=b'\x1A\x1A\x2E'
                   rows.append(row)
-              raw = b''.join(rows)
-              return (b'\x89PNG\r\n\x1a\n' +
-                      ck(b'IHDR', struct.pack('>IIBBBBB', sz, sz, 8, 2, 0, 0, 0)) +
-                      ck(b'IDAT', zlib.compress(raw)) +
-                      ck(b'IEND', b''))
+              return b'\x89PNG\r\n\x1a\n'+ck(b'IHDR',struct.pack('>IIBBBBB',sz,sz,8,2,0,0,0))+ck(b'IDAT',zlib.compress(b''.join(rows)))+ck(b'IEND',b'')
+          for folder,sz in [('mipmap-mdpi',48),('mipmap-hdpi',72),('mipmap-xhdpi',96),('mipmap-xxhdpi',144),('mipmap-xxxhdpi',192)]:
+              p=RES+"/"+folder; os.makedirs(p,exist_ok=True); png=make_icon(sz)
+              open(p+"/ic_launcher.png",'wb').write(png); open(p+"/ic_launcher_round.png",'wb').write(png)
 
-          for folder, size in [('mipmap-mdpi',48),('mipmap-hdpi',72),('mipmap-xhdpi',96),('mipmap-xxhdpi',144),('mipmap-xxxhdpi',192)]:
-              p = RES + "/" + folder
-              os.makedirs(p, exist_ok=True)
-              png = make_icon(size)
-              open(p + "/ic_launcher.png", 'wb').write(png)
-              open(p + "/ic_launcher_round.png", 'wb').write(png)
-
-          print("All XML + assets written OK!")
+          print("All XML + assets OK!")
           PYEOF
 
       - name: Write Gradle files
         run: |
-          mkdir -p NtechCDI/app NtechCDI/gradle/wrapper
+          mkdir -p NtechCDI/app
 
           cat > NtechCDI/app/build.gradle << 'EOF'
           plugins {
