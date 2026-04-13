@@ -181,7 +181,7 @@ jobs:
           }
           """)
 
-          # 3. FRAGMENTS
+          # 3. FRAGMENTS - DIPERBAIKI dengan runOnUiThread
           w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
           import android.os.Bundle
           import android.view.*
@@ -190,7 +190,11 @@ jobs:
           import com.ntech.cdi.*
 
           class MonitorFragment : Fragment() {
-              private val updateTask = { view?.post { updateUI() } }
+              private val updateTask = {
+                  if (isAdded) {
+                      requireActivity().runOnUiThread { updateUI() }
+                  }
+              }
               override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_monitor, c, false)
               override fun onViewCreated(v: View, s: Bundle?) {
                   MainActivity.register(updateTask)
@@ -216,7 +220,11 @@ jobs:
           class MapFragment : Fragment() {
               private lateinit var tableLayout: TableLayout
               private val ets = arrayOfNulls<EditText>(32)
-              private val updateTask = { view?.post { refresh() } }
+              private val updateTask = {
+                  if (isAdded) {
+                      requireActivity().runOnUiThread { refresh() }
+                  }
+              }
               
               override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_map, c, false)
               override fun onViewCreated(v: View, s: Bundle?) {
@@ -250,7 +258,11 @@ jobs:
           import com.ntech.cdi.*
 
           class SettingsFragment : Fragment() {
-              private val updateTask = { view?.post { load() } }
+              private val updateTask = {
+                  if (isAdded) {
+                      requireActivity().runOnUiThread { load() }
+                  }
+              }
               override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_settings, c, false)
               override fun onViewCreated(v: View, s: Bundle?) {
                   MainActivity.register(updateTask)
@@ -277,7 +289,6 @@ jobs:
         run: |
           mkdir -p NtechCDI/app/src/main/res/layout
           mkdir -p NtechCDI/app/src/main/res/values
-          # Perbaikan: tutup tag style dengan </style>
           cat > NtechCDI/app/src/main/res/values/styles.xml << 'EOF'
           <resources>
               <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
@@ -331,8 +342,9 @@ jobs:
 
       - name: Write Config & Manifest
         run: |
+          # Hapus package attribute dari manifest karena sudah pakai namespace di build.gradle
           cat > NtechCDI/app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi">
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
               <uses-permission android:name="android.permission.BLUETOOTH"/>
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" android:maxSdkVersion="32"/>
@@ -368,11 +380,8 @@ jobs:
       - name: Generate Gradle Wrapper & Build APK
         run: |
           cd NtechCDI
-          # Generate wrapper terlebih dahulu
           gradle wrapper --gradle-version 8.1.1
-          # Beri izin eksekusi pada gradlew
           chmod +x gradlew
-          # Build APK
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
