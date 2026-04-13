@@ -1,4 +1,4 @@
-name: NTECH Ultimate Build All-In-One
+name: NTECH-ULTIMATE-FINAL-V57E
 
 on:
   push:
@@ -9,16 +9,16 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Setup Project
+      - name: Create Android Project
         run: |
           mkdir -p app/src/main/java/com/ntech/cdi/ui
           mkdir -p app/src/main/res/layout
           mkdir -p app/src/main/res/values
 
-          # ── 1. GRADLE CONFIG ──
+          # --- 1. GRADLE & DEPENDENCIES ---
           cat > settings.gradle << 'EOF'
           include ':app'
           EOF
@@ -43,7 +43,7 @@ jobs:
                   minSdk 24
                   targetSdk 34
                   versionCode 1
-                  versionName "5.7e-Ultimate"
+                  versionName "5.7e-ULTIMATE"
               }
           }
           dependencies {
@@ -53,7 +53,7 @@ jobs:
           }
           EOF
 
-          # ── 2. CORE LOGIC (MainActivity.java) ──
+          # --- 2. MAIN LOGIC (Bluetooth & OTG Handler) ---
           cat > app/src/main/java/com/ntech/cdi/MainActivity.java << 'EOF'
           package com.ntech.cdi;
           import android.Manifest; import android.bluetooth.*; import android.content.*;
@@ -75,13 +75,14 @@ jobs:
                   tvStatus = findViewById(R.id.tvStatus);
                   for(int i=0; i<32; i++) mapData[i] = "15";
 
-                  findViewById(R.id.btnConnect).setOnClickListener(v -> { if(!isConnected) showConnectDialog(); else disconnect(); });
+                  findViewById(R.id.btnConnect).setOnClickListener(v -> showConnectDialog());
                   findViewById(R.id.navMon).setOnClickListener(v -> loadFrag(new MonitorFragment()));
                   findViewById(R.id.navMap).setOnClickListener(v -> loadFrag(new MapFragment()));
                   findViewById(R.id.navSet).setOnClickListener(v -> loadFrag(new SettingsFragment()));
+                  findViewById(R.id.navRum).setOnClickListener(v -> loadFrag(new RumbleFragment()));
                   
                   loadFrag(new MonitorFragment());
-                  if(Build.VERSION.SDK_INT >= 31) requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT}, 1);
+                  if(Build.VERSION.SDK_INT >= 31) requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN}, 1);
               }
 
               private void loadFrag(Fragment f) {
@@ -89,7 +90,7 @@ jobs:
               }
 
               private void showConnectDialog() {
-                  String[] opts = {"Bluetooth (HC-05)", "USB OTG (Serial)"};
+                  String[] opts = {"Bluetooth", "USB OTG Serial"};
                   new android.app.AlertDialog.Builder(this).setTitle("Pilih Koneksi")
                       .setItems(opts, (d, w) -> { if(w==0) connectBt(); else connectUsb(); }).show();
               }
@@ -102,33 +103,36 @@ jobs:
                   usbPort = drv.get(0).getPorts().get(0);
                   try {
                       usbPort.open(c); usbPort.setParameters(9600, 8, 1, 0);
-                      isUsb = true; isConnected = true; tvStatus.setText("OTG Connected");
-                      send("GET\n"); listen();
+                      isUsb = true; isConnected = true; tvStatus.setText("USB Connected");
+                      send("GET\n"); startListening();
                   } catch(Exception e) {}
               }
 
               private void connectBt() {
                   BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
                   BluetoothDevice dev = ba.getBondedDevices().stream().filter(d->d.getName().contains("HC")).findFirst().orElse(null);
-                  if(dev == null) return;
+                  if(dev == null) { Toast.makeText(this, "HC-05 tidak ditemukan!", Toast.LENGTH_SHORT).show(); return; }
                   new Thread(() -> {
                       try {
                           btSocket = dev.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"));
                           btSocket.connect();
-                          runOnUiThread(() -> { isUsb=false; isConnected=true; tvStatus.setText("BT Connected: "+dev.getName()); });
-                          send("GET\n"); listen();
-                      } catch(Exception e) {}
+                          runOnUiThread(() -> { isUsb=false; isConnected=true; tvStatus.setText("BT: "+dev.getName()); });
+                          send("GET\n"); startListening();
+                      } catch(Exception e) { runOnUiThread(()->Toast.makeText(this,"Gagal BT",0).show()); }
                   }).start();
               }
 
-              private void listen() {
+              private void startListening() {
                   new Thread(() -> {
                       try {
                           InputStream in = isUsb ? null : btSocket.getInputStream();
                           BufferedReader r = new BufferedReader(new InputStreamReader(in));
                           while(isConnected) {
                               String line = r.readLine();
-                              if(line != null && line.startsWith("RPM:")) rpm = line.substring(4);
+                              if(line != null) {
+                                  if(line.startsWith("RPM:")) rpm = line.substring(4);
+                                  // Parsing data lainnya bisa ditambah di sini
+                              }
                           }
                       } catch(Exception e) {}
                   }).start();
@@ -138,19 +142,14 @@ jobs:
                   new Thread(() -> {
                       try {
                           if(isUsb) usbPort.write(msg.getBytes(), 1000);
-                          else btSocket.getOutputStream().write(msg.getBytes());
+                          else if(btSocket!=null) btSocket.getOutputStream().write(msg.getBytes());
                       } catch(Exception e) {}
                   }).start();
-              }
-
-              private void disconnect() {
-                  try { isConnected=false; if(isUsb) usbPort.close(); else btSocket.close(); } catch(Exception e) {}
-                  tvStatus.setText("Disconnected");
               }
           }
           EOF
 
-          # ── 3. FRAGMENTS (Monitor, Map, Settings) ──
+          # --- 3. FRAGMENTS (MONITOR, MAP, SETTINGS, RUMBLE) ---
           cat > app/src/main/java/com/ntech/cdi/ui/MonitorFragment.java << 'EOF'
           package com.ntech.cdi.ui;
           import android.os.*; import android.view.*; import android.widget.*;
@@ -210,40 +209,62 @@ jobs:
               @Override public View onCreateView(LayoutInflater i, ViewGroup c, Bundle s) {
                   View v = i.inflate(R.layout.frag_set, c, false);
                   EditText etLim = v.findViewById(R.id.etLim);
+                  EditText etAng = v.findViewById(R.id.etAng);
                   v.findViewById(R.id.btnSave).setOnClickListener(view -> {
-                      ((MainActivity)getActivity()).send("LIM:"+etLim.getText().toString()+"\n");
+                      String cmd = "LIM:" + etLim.getText().toString() + "|ANG:" + etAng.getText().toString() + "\n";
+                      ((MainActivity)getActivity()).send(cmd);
                   });
                   return v;
               }
           }
           EOF
 
-          # ── 4. UI RESOURCES ──
+          cat > app/src/main/java/com/ntech/cdi/ui/RumbleFragment.java << 'EOF'
+          package com.ntech.cdi.ui;
+          import android.os.Bundle; import android.view.*; import android.widget.*;
+          import androidx.fragment.app.Fragment; import com.ntech.cdi.*;
+
+          public class RumbleFragment extends Fragment {
+              @Override public View onCreateView(LayoutInflater i, ViewGroup c, Bundle s) {
+                  View v = i.inflate(R.layout.frag_rum, c, false);
+                  EditText etPattern = v.findViewById(R.id.etPattern);
+                  v.findViewById(R.id.btnRum).setOnClickListener(view -> {
+                      ((MainActivity)getActivity()).send("RUM:" + etPattern.getText().toString() + "\n");
+                  });
+                  return v;
+              }
+          }
+          EOF
+
+          # --- 4. LAYOUTS & STYLES ---
           cat > app/src/main/res/layout/act_main.xml << 'EOF'
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#000">
-              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="15dp" android:background="#111">
-                  <TextView android:id="@+id/tvStatus" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Disconnected" android:textColor="#F00"/>
-                  <Button android:id="@+id/btnConnect" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Connect" android:backgroundTint="#FF6B00"/>
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="10dp" android:background="#111" android:gravity="center">
+                  <TextView android:id="@+id/tvStatus" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="OFFLINE" android:textColor="#F00" android:textStyle="bold"/>
+                  <Button android:id="@+id/btnConnect" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CONNECT" android:backgroundTint="#FF6B00"/>
               </LinearLayout>
               <FrameLayout android:id="@+id/container" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
-              <LinearLayout android:layout_width="match_parent" android:layout_height="60dp" android:background="#111">
-                  <Button android:id="@+id/navMon" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="MONITOR" android:background="#0000"/>
-                  <Button android:id="@+id/navMap" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="MAP" android:background="#0000"/>
-                  <Button android:id="@+id/navSet" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="SETTING" android:background="#0000"/>
-              </LinearLayout>
+              <HorizontalScrollView android:layout_width="match_parent" android:layout_height="60dp" android:background="#111">
+                  <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent">
+                      <Button android:id="@+id/navMon" android:layout_width="100dp" android:layout_height="match_parent" android:text="DASH" android:background="#0000"/>
+                      <Button android:id="@+id/navMap" android:layout_width="100dp" android:layout_height="match_parent" android:text="MAP" android:background="#0000"/>
+                      <Button android:id="@+id/navSet" android:layout_width="100dp" android:layout_height="match_parent" android:text="SET" android:background="#0000"/>
+                      <Button android:id="@+id/navRum" android:layout_width="100dp" android:layout_height="match_parent" android:text="RUMBLE" android:background="#0000"/>
+                  </LinearLayout>
+              </HorizontalScrollView>
           </LinearLayout>
           EOF
 
           cat > app/src/main/res/layout/frag_mon.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center">
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ENGINE RPM" android:textColor="#FFF"/>
-              <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="#0F0" android:textSize="100sp" android:textStyle="bold"/>
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center" android:padding="20dp">
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ENGINE RPM" android:textColor="#FFF" android:textSize="18sp"/>
+              <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="#0F0" android:textSize="120sp" android:textStyle="bold"/>
           </LinearLayout>
           EOF
 
           cat > app/src/main/res/layout/frag_map.xml << 'EOF'
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
-              <Button android:id="@+id/btnSend" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SEND MAP TO EEPROM" android:backgroundTint="#2E7D32"/>
+              <Button android:id="@+id/btnSend" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="WRITE TO EEPROM" android:backgroundTint="#2E7D32" android:layout_margin="10dp"/>
               <ScrollView android:layout_width="match_parent" android:layout_height="match_parent">
                   <TableLayout android:id="@+id/tbl" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="10dp" android:stretchColumns="1"/>
               </ScrollView>
@@ -254,7 +275,18 @@ jobs:
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
               <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RPM LIMITER" android:textColor="#FFF"/>
               <EditText android:id="@+id/etLim" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="12000" android:textColor="#FFF" android:inputType="number"/>
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PULSER ANGLE" android:textColor="#FFF" android:layout_marginTop="10dp"/>
+              <EditText android:id="@+id/etAng" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="63" android:textColor="#FFF" android:inputType="number"/>
               <Button android:id="@+id/btnSave" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE SETTINGS" android:layout_marginTop="20dp"/>
+          </LinearLayout>
+          EOF
+
+          cat > app/src/main/res/layout/frag_rum.xml << 'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RUMBLE IDLE PATTERN (BIT)" android:textColor="#FFF"/>
+              <EditText android:id="@+id/etPattern" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="000111" android:textColor="#FFF" android:inputType="text"/>
+              <Button android:id="@+id/btnRum" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SEND RUMBLE" android:layout_marginTop="20dp"/>
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Contoh: 000111 (0=mati, 1=skip api)" android:textColor="#888" android:textSize="12sp"/>
           </LinearLayout>
           EOF
 
@@ -263,12 +295,13 @@ jobs:
           EOF
           echo '<resources><string name="app_name">NTECH ULTIMATE</string></resources>' > app/src/main/res/values/strings.xml
 
-          # ── 5. MANIFEST ──
+          # --- 5. MANIFEST ---
           cat > app/src/main/AndroidManifest.xml << 'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi">
               <uses-permission android:name="android.permission.BLUETOOTH"/>
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
               <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
               <uses-feature android:name="android.hardware.usb.host" />
               <application android:label="NTECH ULTIMATE" android:theme="@style/Theme.NTECH">
                   <activity android:name=".MainActivity" android:exported="true">
@@ -287,10 +320,11 @@ jobs:
       - name: Build APK
         run: |
           gradle wrapper --gradle-version 8.1.1
+          chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
-      - name: Upload
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NTECH-ULTIMATE-V57E
+          name: NTECH-CDI-ULTIMATE
           path: app/build/outputs/apk/debug/app-debug.apk
