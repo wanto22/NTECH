@@ -1,4 +1,4 @@
-name: NTECH-ULTIMATE-FINAL-V57E
+name: NTECH CDI Tuner Final Release
 
 on:
   push:
@@ -12,305 +12,6 @@ jobs:
       - name: Checkout Repo
         uses: actions/checkout@v4
 
-      - name: Create Android Project
-        run: |
-          mkdir -p app/src/main/java/com/ntech/cdi/ui
-          mkdir -p app/src/main/res/layout
-          mkdir -p app/src/main/res/values
-
-          # --- 1. GRADLE & DEPENDENCIES ---
-          cat > settings.gradle << 'EOF'
-          include ':app'
-          EOF
-
-          cat > build.gradle << 'EOF'
-          buildscript {
-              repositories { google(); mavenCentral() }
-              dependencies { classpath 'com.android.tools.build:gradle:8.1.1' }
-          }
-          allprojects {
-              repositories { google(); mavenCentral(); maven { url 'https://jitpack.io' } }
-          }
-          EOF
-
-          cat > app/build.gradle << 'EOF'
-          apply plugin: 'com.android.application'
-          android {
-              namespace 'com.ntech.cdi'
-              compileSdk 34
-              defaultConfig {
-                  applicationId "com.ntech.cdi"
-                  minSdk 24
-                  targetSdk 34
-                  versionCode 1
-                  versionName "5.7e-ULTIMATE"
-              }
-          }
-          dependencies {
-              implementation 'androidx.appcompat:appcompat:1.6.1'
-              implementation 'com.google.android.material:material:1.10.0'
-              implementation 'com.github.mik3y:usb-serial-for-android:3.7.0'
-          }
-          EOF
-
-          # --- 2. MAIN LOGIC (Bluetooth & OTG Handler) ---
-          cat > app/src/main/java/com/ntech/cdi/MainActivity.java << 'EOF'
-          package com.ntech.cdi;
-          import android.Manifest; import android.bluetooth.*; import android.content.*;
-          import android.hardware.usb.*; import android.os.*; import android.widget.*;
-          import androidx.appcompat.app.AppCompatActivity; import androidx.fragment.app.Fragment;
-          import com.hoho.android.usbserial.driver.*; import com.ntech.cdi.ui.*;
-          import java.io.*; import java.util.*;
-
-          public class MainActivity extends AppCompatActivity {
-              public static String rpm="0", lim="12000", ang="63", map="1", edge="0", rumble="000111";
-              public static String[] mapData = new String[32];
-              public static BluetoothSocket btSocket;
-              public static UsbSerialPort usbPort;
-              public static boolean isConnected = false, isUsb = false;
-              private TextView tvStatus;
-
-              @Override protected void onCreate(Bundle s) {
-                  super.onCreate(s); setContentView(R.layout.act_main);
-                  tvStatus = findViewById(R.id.tvStatus);
-                  for(int i=0; i<32; i++) mapData[i] = "15";
-
-                  findViewById(R.id.btnConnect).setOnClickListener(v -> showConnectDialog());
-                  findViewById(R.id.navMon).setOnClickListener(v -> loadFrag(new MonitorFragment()));
-                  findViewById(R.id.navMap).setOnClickListener(v -> loadFrag(new MapFragment()));
-                  findViewById(R.id.navSet).setOnClickListener(v -> loadFrag(new SettingsFragment()));
-                  findViewById(R.id.navRum).setOnClickListener(v -> loadFrag(new RumbleFragment()));
-                  
-                  loadFrag(new MonitorFragment());
-                  if(Build.VERSION.SDK_INT >= 31) requestPermissions(new String[]{Manifest.permission.BLUETOOTH_CONNECT, Manifest.permission.BLUETOOTH_SCAN}, 1);
-              }
-
-              private void loadFrag(Fragment f) {
-                  getSupportFragmentManager().beginTransaction().replace(R.id.container, f).commit();
-              }
-
-              private void showConnectDialog() {
-                  String[] opts = {"Bluetooth", "USB OTG Serial"};
-                  new android.app.AlertDialog.Builder(this).setTitle("Pilih Koneksi")
-                      .setItems(opts, (d, w) -> { if(w==0) connectBt(); else connectUsb(); }).show();
-              }
-
-              private void connectUsb() {
-                  UsbManager m = (UsbManager) getSystemService(Context.USB_SERVICE);
-                  List<UsbSerialDriver> drv = UsbSerialProber.getDefaultProber().findAllDrivers(m);
-                  if(drv.isEmpty()) return;
-                  UsbDeviceConnection c = m.openDevice(drv.get(0).getDevice());
-                  usbPort = drv.get(0).getPorts().get(0);
-                  try {
-                      usbPort.open(c); usbPort.setParameters(9600, 8, 1, 0);
-                      isUsb = true; isConnected = true; tvStatus.setText("USB Connected");
-                      send("GET\n"); startListening();
-                  } catch(Exception e) {}
-              }
-
-              private void connectBt() {
-                  BluetoothAdapter ba = BluetoothAdapter.getDefaultAdapter();
-                  BluetoothDevice dev = ba.getBondedDevices().stream().filter(d->d.getName().contains("HC")).findFirst().orElse(null);
-                  if(dev == null) { Toast.makeText(this, "HC-05 tidak ditemukan!", Toast.LENGTH_SHORT).show(); return; }
-                  new Thread(() -> {
-                      try {
-                          btSocket = dev.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"));
-                          btSocket.connect();
-                          runOnUiThread(() -> { isUsb=false; isConnected=true; tvStatus.setText("BT: "+dev.getName()); });
-                          send("GET\n"); startListening();
-                      } catch(Exception e) { runOnUiThread(()->Toast.makeText(this,"Gagal BT",0).show()); }
-                  }).start();
-              }
-
-              private void startListening() {
-                  new Thread(() -> {
-                      try {
-                          InputStream in = isUsb ? null : btSocket.getInputStream();
-                          BufferedReader r = new BufferedReader(new InputStreamReader(in));
-                          while(isConnected) {
-                              String line = r.readLine();
-                              if(line != null) {
-                                  if(line.startsWith("RPM:")) rpm = line.substring(4);
-                                  // Parsing data lainnya bisa ditambah di sini
-                              }
-                          }
-                      } catch(Exception e) {}
-                  }).start();
-              }
-
-              public void send(String msg) {
-                  new Thread(() -> {
-                      try {
-                          if(isUsb) usbPort.write(msg.getBytes(), 1000);
-                          else if(btSocket!=null) btSocket.getOutputStream().write(msg.getBytes());
-                      } catch(Exception e) {}
-                  }).start();
-              }
-          }
-          EOF
-
-          # --- 3. FRAGMENTS (MONITOR, MAP, SETTINGS, RUMBLE) ---
-          cat > app/src/main/java/com/ntech/cdi/ui/MonitorFragment.java << 'EOF'
-          package com.ntech.cdi.ui;
-          import android.os.*; import android.view.*; import android.widget.*;
-          import androidx.fragment.app.Fragment; import com.ntech.cdi.*;
-
-          public class MonitorFragment extends Fragment {
-              @Override public View onCreateView(LayoutInflater i, ViewGroup c, Bundle s) {
-                  View v = i.inflate(R.layout.frag_mon, c, false);
-                  TextView tvRpm = v.findViewById(R.id.tvRpm);
-                  Handler h = new Handler();
-                  h.postDelayed(new Runnable() {
-                      @Override public void run() {
-                          tvRpm.setText(MainActivity.rpm);
-                          if(isVisible()) h.postDelayed(this, 100);
-                      }
-                  }, 100);
-                  return v;
-              }
-          }
-          EOF
-
-          cat > app/src/main/java/com/ntech/cdi/ui/MapFragment.java << 'EOF'
-          package com.ntech.cdi.ui;
-          import android.os.Bundle; import android.view.*; import android.widget.*;
-          import androidx.fragment.app.Fragment; import com.ntech.cdi.*;
-
-          public class MapFragment extends Fragment {
-              @Override public View onCreateView(LayoutInflater i, ViewGroup c, Bundle s) {
-                  View v = i.inflate(R.layout.frag_map, c, false);
-                  TableLayout tbl = v.findViewById(R.id.tbl);
-                  EditText[] ets = new EditText[32];
-                  for(int j=0; j<32; j++) {
-                      TableRow row = new TableRow(getContext());
-                      TextView t = new TextView(getContext()); t.setText(j*500+" RPM"); t.setTextColor(-1);
-                      EditText e = new EditText(getContext()); e.setText(MainActivity.mapData[j]); e.setTextColor(-1); e.setInputType(2);
-                      ets[j] = e; row.addView(t); row.addView(e); tbl.addView(row);
-                  }
-                  v.findViewById(R.id.btnSend).setOnClickListener(view -> {
-                      StringBuilder sb = new StringBuilder("M1:");
-                      for(int j=0; j<32; j++) {
-                          MainActivity.mapData[j] = ets[j].getText().toString();
-                          sb.append(MainActivity.mapData[j]).append(j==31?"":",");
-                      }
-                      ((MainActivity)getActivity()).send(sb.toString()+"\n");
-                  });
-                  return v;
-              }
-          }
-          EOF
-
-          cat > app/src/main/java/com/ntech/cdi/ui/SettingsFragment.java << 'EOF'
-          package com.ntech.cdi.ui;
-          import android.os.Bundle; import android.view.*; import android.widget.*;
-          import androidx.fragment.app.Fragment; import com.ntech.cdi.*;
-
-          public class SettingsFragment extends Fragment {
-              @Override public View onCreateView(LayoutInflater i, ViewGroup c, Bundle s) {
-                  View v = i.inflate(R.layout.frag_set, c, false);
-                  EditText etLim = v.findViewById(R.id.etLim);
-                  EditText etAng = v.findViewById(R.id.etAng);
-                  v.findViewById(R.id.btnSave).setOnClickListener(view -> {
-                      String cmd = "LIM:" + etLim.getText().toString() + "|ANG:" + etAng.getText().toString() + "\n";
-                      ((MainActivity)getActivity()).send(cmd);
-                  });
-                  return v;
-              }
-          }
-          EOF
-
-          cat > app/src/main/java/com/ntech/cdi/ui/RumbleFragment.java << 'EOF'
-          package com.ntech.cdi.ui;
-          import android.os.Bundle; import android.view.*; import android.widget.*;
-          import androidx.fragment.app.Fragment; import com.ntech.cdi.*;
-
-          public class RumbleFragment extends Fragment {
-              @Override public View onCreateView(LayoutInflater i, ViewGroup c, Bundle s) {
-                  View v = i.inflate(R.layout.frag_rum, c, false);
-                  EditText etPattern = v.findViewById(R.id.etPattern);
-                  v.findViewById(R.id.btnRum).setOnClickListener(view -> {
-                      ((MainActivity)getActivity()).send("RUM:" + etPattern.getText().toString() + "\n");
-                  });
-                  return v;
-              }
-          }
-          EOF
-
-          # --- 4. LAYOUTS & STYLES ---
-          cat > app/src/main/res/layout/act_main.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#000">
-              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="10dp" android:background="#111" android:gravity="center">
-                  <TextView android:id="@+id/tvStatus" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="OFFLINE" android:textColor="#F00" android:textStyle="bold"/>
-                  <Button android:id="@+id/btnConnect" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CONNECT" android:backgroundTint="#FF6B00"/>
-              </LinearLayout>
-              <FrameLayout android:id="@+id/container" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
-              <HorizontalScrollView android:layout_width="match_parent" android:layout_height="60dp" android:background="#111">
-                  <LinearLayout android:layout_width="wrap_content" android:layout_height="match_parent">
-                      <Button android:id="@+id/navMon" android:layout_width="100dp" android:layout_height="match_parent" android:text="DASH" android:background="#0000"/>
-                      <Button android:id="@+id/navMap" android:layout_width="100dp" android:layout_height="match_parent" android:text="MAP" android:background="#0000"/>
-                      <Button android:id="@+id/navSet" android:layout_width="100dp" android:layout_height="match_parent" android:text="SET" android:background="#0000"/>
-                      <Button android:id="@+id/navRum" android:layout_width="100dp" android:layout_height="match_parent" android:text="RUMBLE" android:background="#0000"/>
-                  </LinearLayout>
-              </HorizontalScrollView>
-          </LinearLayout>
-          EOF
-
-          cat > app/src/main/res/layout/frag_mon.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:gravity="center" android:padding="20dp">
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ENGINE RPM" android:textColor="#FFF" android:textSize="18sp"/>
-              <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textColor="#0F0" android:textSize="120sp" android:textStyle="bold"/>
-          </LinearLayout>
-          EOF
-
-          cat > app/src/main/res/layout/frag_map.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
-              <Button android:id="@+id/btnSend" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="WRITE TO EEPROM" android:backgroundTint="#2E7D32" android:layout_margin="10dp"/>
-              <ScrollView android:layout_width="match_parent" android:layout_height="match_parent">
-                  <TableLayout android:id="@+id/tbl" android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="10dp" android:stretchColumns="1"/>
-              </ScrollView>
-          </LinearLayout>
-          EOF
-
-          cat > app/src/main/res/layout/frag_set.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RPM LIMITER" android:textColor="#FFF"/>
-              <EditText android:id="@+id/etLim" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="12000" android:textColor="#FFF" android:inputType="number"/>
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="PULSER ANGLE" android:textColor="#FFF" android:layout_marginTop="10dp"/>
-              <EditText android:id="@+id/etAng" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="63" android:textColor="#FFF" android:inputType="number"/>
-              <Button android:id="@+id/btnSave" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE SETTINGS" android:layout_marginTop="20dp"/>
-          </LinearLayout>
-          EOF
-
-          cat > app/src/main/res/layout/frag_rum.xml << 'EOF'
-          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RUMBLE IDLE PATTERN (BIT)" android:textColor="#FFF"/>
-              <EditText android:id="@+id/etPattern" android:layout_width="match_parent" android:layout_height="wrap_content" android:hint="000111" android:textColor="#FFF" android:inputType="text"/>
-              <Button android:id="@+id/btnRum" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SEND RUMBLE" android:layout_marginTop="20dp"/>
-              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Contoh: 000111 (0=mati, 1=skip api)" android:textColor="#888" android:textSize="12sp"/>
-          </LinearLayout>
-          EOF
-
-          cat > app/src/main/res/values/styles.xml << 'EOF'
-          <resources><style name="Theme.NTECH" parent="Theme.AppCompat.NoActionBar"/></resources>
-          EOF
-          echo '<resources><string name="app_name">NTECH ULTIMATE</string></resources>' > app/src/main/res/values/strings.xml
-
-          # --- 5. MANIFEST ---
-          cat > app/src/main/AndroidManifest.xml << 'EOF'
-          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi">
-              <uses-permission android:name="android.permission.BLUETOOTH"/>
-              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
-              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>
-              <uses-permission android:name="android.permission.BLUETOOTH_SCAN"/>
-              <uses-feature android:name="android.hardware.usb.host" />
-              <application android:label="NTECH ULTIMATE" android:theme="@style/Theme.NTECH">
-                  <activity android:name=".MainActivity" android:exported="true">
-                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
-                  </activity>
-              </application>
-          </manifest>
-          EOF
-
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -322,13 +23,350 @@ jobs:
         with:
           gradle-version: 8.1.1
 
+      - name: Write Android Source Code
+        run: |
+          python3 - << 'PYEOF'
+          import os
+
+          def w(path, content):
+              os.makedirs(os.path.dirname(path), exist_ok=True)
+              open(path, 'w', encoding='utf-8').write(content)
+
+          B   = "NtechCDI"
+          PKG = B + "/app/src/main/java/com/ntech/cdi"
+          UI  = PKG + "/ui"
+
+          # 1. DATA LOGIC (CdiConfig.kt)
+          w(PKG + "/CdiConfig.kt", r"""package com.ntech.cdi
+          class CdiConfig {
+              val map1 = IntArray(32) { 15 }; val map2 = IntArray(32) { 15 }; val map3 = IntArray(32) { 15 }
+              var rpmLimiter = 12000; var pulserAngle = 63; var scrPulse = 1000; var activeMap = 1; var edge = 0; var lastRpm = 0
+              
+              fun parseLine(line: String): Boolean {
+                  try {
+                      val l = line.trim().uppercase()
+                      if (l.startsWith("RPM:")) { lastRpm = l.substring(4).toInt(); return false }
+                      if (l.startsWith("M1:")) { parseMap(l.substring(3), map1); return true }
+                      if (l.startsWith("M2:")) { parseMap(l.substring(3), map2); return true }
+                      if (l.startsWith("M3:")) { parseMap(l.substring(3), map3); return true }
+                      if (l.startsWith("LIM:")) { rpmLimiter = l.substring(4).toInt(); return true }
+                      if (l.startsWith("ANG:")) { pulserAngle = l.substring(4).toInt(); return true }
+                      if (l.startsWith("ACT:")) { activeMap = l.substring(4).toInt(); return true }
+                      if (l.startsWith("EDG:")) { edge = l.substring(4).toInt(); return true }
+                      if (l.startsWith("SCR:")) { scrPulse = l.substring(4).toInt(); return true }
+                  } catch(e: Exception) {}
+                  return false
+              }
+              private fun parseMap(data: String, arr: IntArray) {
+                  data.split(",").forEachIndexed { i, s -> if(i < 32) arr[i] = s.trim().toIntOrNull() ?: arr[i] }
+              }
+          }
+          """)
+
+          # 2. MAIN ACTIVITY (Bluetooth + Permission)
+          w(PKG + "/MainActivity.kt", r"""package com.ntech.cdi
+          import android.Manifest
+          import android.annotation.SuppressLint
+          import android.bluetooth.*
+          import android.content.pm.PackageManager
+          import android.os.*
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.core.app.ActivityCompat
+          import androidx.core.content.ContextCompat
+          import com.ntech.cdi.ui.*
+          import java.util.UUID
+
+          class MainActivity : AppCompatActivity() {
+              companion object {
+                  val config = CdiConfig()
+                  var socket: BluetoothSocket? = null
+                  var isConnected = false
+                  val listeners = mutableSetOf<() -> Unit>()
+                  fun register(l: () -> Unit) = listeners.add(l)
+                  fun unregister(l: () -> Unit) = listeners.remove(l)
+              }
+
+              private val frags by lazy { arrayOf(MonitorFragment(), MapFragment(), SettingsFragment()) }
+              private val REQUEST_BT_PERM = 1001
+              
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+                  setContentView(R.layout.activity_main)
+                  findViewById<TextView>(R.id.btnConnect).setOnClickListener { if(!isConnected) checkPermissionsAndScan() else disconnect() }
+                  findViewById<TextView>(R.id.navMonitor).setOnClickListener { showTab(0) }
+                  findViewById<TextView>(R.id.navMap).setOnClickListener { showTab(1) }
+                  findViewById<TextView>(R.id.navSettings).setOnClickListener { showTab(2) }
+                  showTab(0)
+              }
+
+              private fun checkPermissionsAndScan() {
+                  if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                      if (ContextCompat.checkSelfPermission(this, Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
+                          ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.BLUETOOTH_CONNECT), REQUEST_BT_PERM)
+                          return
+                      }
+                  }
+                  scanBt()
+              }
+
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, grantResults: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, grantResults)
+                  if (requestCode == REQUEST_BT_PERM && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
+                      scanBt()
+                  } else {
+                      Toast.makeText(this, "Bluetooth permission required", Toast.LENGTH_SHORT).show()
+                  }
+              }
+
+              private fun showTab(i: Int) {
+                  val t = supportFragmentManager.beginTransaction()
+                  frags.forEach { if(it.isAdded) t.hide(it) }
+                  if(!frags[i].isAdded) t.add(R.id.fragContainer, frags[i]) else t.show(frags[i])
+                  t.commit()
+              }
+
+              @SuppressLint("MissingPermission")
+              private fun scanBt() {
+                  val ba = BluetoothAdapter.getDefaultAdapter()
+                  if (ba == null) {
+                      runOnUiThread { Toast.makeText(this, "Device doesn't support Bluetooth", Toast.LENGTH_SHORT).show() }
+                      return
+                  }
+                  val dev = ba.bondedDevices.find { it.name?.contains("HC") == true }
+                  if (dev == null) {
+                      runOnUiThread { Toast.makeText(this, "No HC-XX device paired", Toast.LENGTH_SHORT).show() }
+                      return
+                  }
+                  Thread {
+                      try {
+                          socket = dev.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
+                          socket?.connect()
+                          isConnected = true
+                          runOnUiThread {
+                              findViewById<TextView>(R.id.tvStatus).text = "Connected: ${dev.name}"
+                              Toast.makeText(this, "Connected", Toast.LENGTH_SHORT).show()
+                          }
+                          sendCmd("GET\n")
+                          val reader = socket?.inputStream?.bufferedReader()
+                          while(isConnected) {
+                              val line = reader?.readLine() ?: break
+                              if(config.parseLine(line) || line.startsWith("RPM")) {
+                                  runOnUiThread { listeners.forEach { it() } }
+                              }
+                          }
+                      } catch(e: Exception) {
+                          isConnected = false
+                          runOnUiThread {
+                              findViewById<TextView>(R.id.tvStatus).text = "Connection failed"
+                              Toast.makeText(this, "Connection error", Toast.LENGTH_SHORT).show()
+                          }
+                      }
+                  }.start()
+              }
+
+              fun sendCmd(s: String) {
+                  Thread {
+                      try {
+                          socket?.outputStream?.write(s.toByteArray())
+                      } catch(e: Exception) { e.printStackTrace() }
+                  }.start()
+              }
+              
+              private fun disconnect() { 
+                  isConnected = false
+                  try { socket?.close() } catch(e: Exception) {}
+                  runOnUiThread { findViewById<TextView>(R.id.tvStatus).text = "Disconnected" }
+              }
+          }
+          """)
+
+          # 3. FRAGMENTS (dengan thread safety)
+          w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
+          import android.os.Bundle
+          import android.view.*
+          import android.widget.*
+          import androidx.fragment.app.Fragment
+          import com.ntech.cdi.*
+
+          class MonitorFragment : Fragment() {
+              private val updateTask = { view?.post { updateUI() } }
+              override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_monitor, c, false)
+              override fun onViewCreated(v: View, s: Bundle?) {
+                  MainActivity.register(updateTask)
+                  v.findViewById<Button>(R.id.btnRefresh).setOnClickListener { (activity as? MainActivity)?.sendCmd("GET\n") }
+              }
+              private fun updateUI() {
+                  val cfg = MainActivity.config
+                  view?.findViewById<TextView>(R.id.tvRpm)?.text = cfg.lastRpm.toString()
+                  view?.findViewById<TextView>(R.id.tvLim)?.text = "Limiter: ${cfg.rpmLimiter} RPM"
+                  view?.findViewById<TextView>(R.id.tvMap)?.text = "Active Map: ${cfg.activeMap}"
+              }
+              override fun onDestroyView() { super.onDestroyView(); MainActivity.unregister(updateTask) }
+          }
+          """)
+
+          w(UI + "/MapFragment.kt", r"""package com.ntech.cdi.ui
+          import android.os.Bundle
+          import android.view.*
+          import android.widget.*
+          import androidx.fragment.app.Fragment
+          import com.ntech.cdi.*
+
+          class MapFragment : Fragment() {
+              private lateinit var tableLayout: TableLayout
+              private val ets = arrayOfNulls<EditText>(32)
+              private val updateTask = { view?.post { refresh() } }
+              
+              override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_map, c, false)
+              override fun onViewCreated(v: View, s: Bundle?) {
+                  tableLayout = v.findViewById(R.id.tbl1)
+                  val cfg = MainActivity.config
+                  for(i in 0..31) {
+                      val row = TableRow(context)
+                      val tv = TextView(context).apply { text = "${i*500} RPM"; setPadding(10,10,10,10); setTextColor(0xFFFFFFFF.toInt()) }
+                      val et = EditText(context).apply { setText(cfg.map1[i].toString()); setTextColor(0xFFFFFFFF.toInt()); setPadding(10,10,10,10); setInputType(2) }
+                      ets[i] = et; row.addView(tv); row.addView(et); tableLayout.addView(row)
+                  }
+                  MainActivity.register(updateTask)
+                  v.findViewById<Button>(R.id.btnSend).setOnClickListener {
+                      val data = (0..31).joinToString(",") { ets[it]?.text.toString() }
+                      (activity as? MainActivity)?.sendCmd("M1:$data\n")
+                  }
+              }
+              private fun refresh() {
+                  val cfg = MainActivity.config
+                  for(i in 0..31) ets[i]?.setText(cfg.map1[i].toString())
+              }
+              override fun onDestroyView() { super.onDestroyView(); MainActivity.unregister(updateTask) }
+          }
+          """)
+
+          w(UI + "/SettingsFragment.kt", r"""package com.ntech.cdi.ui
+          import android.os.Bundle
+          import android.view.*
+          import android.widget.*
+          import androidx.fragment.app.Fragment
+          import com.ntech.cdi.*
+
+          class SettingsFragment : Fragment() {
+              private val updateTask = { view?.post { load() } }
+              override fun onCreateView(i: LayoutInflater, c: ViewGroup?, s: Bundle?) = i.inflate(R.layout.fragment_settings, c, false)
+              override fun onViewCreated(v: View, s: Bundle?) {
+                  MainActivity.register(updateTask)
+                  v.findViewById<Button>(R.id.btnSaveLim).setOnClickListener {
+                      val lim = v.findViewById<EditText>(R.id.etLim).text.toString()
+                      (activity as? MainActivity)?.sendCmd("LIM:$lim\n")
+                  }
+                  v.findViewById<Button>(R.id.btnSaveAng).setOnClickListener {
+                      val ang = v.findViewById<EditText>(R.id.etAng).text.toString()
+                      (activity as? MainActivity)?.sendCmd("ANG:$ang\n")
+                  }
+              }
+              private fun load() {
+                  val cfg = MainActivity.config
+                  view?.findViewById<EditText>(R.id.etLim)?.setText(cfg.rpmLimiter.toString())
+                  view?.findViewById<EditText>(R.id.etAng)?.setText(cfg.pulserAngle.toString())
+              }
+              override fun onDestroyView() { super.onDestroyView(); MainActivity.unregister(updateTask) }
+          }
+          """)
+          PYEOF
+
+      - name: Write Layout Resources
+        run: |
+          mkdir -p NtechCDI/app/src/main/res/layout
+          mkdir -p NtechCDI/app/src/main/res/values
+          echo '<resources><style name="AppTheme" parent="Theme.AppCompat.NoActionBar"><item name="android:windowBackground">#000</item></resources>' > NtechCDI/app/src/main/res/values/styles.xml
+          echo '<resources><string name="app_name">NTECH TUNER</string></resources>' > NtechCDI/app/src/main/res/values/strings.xml
+
+          cat > NtechCDI/app/src/main/res/layout/activity_main.xml << 'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:background="#000">
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:padding="15dp" android:background="#111">
+                  <TextView android:id="@+id/tvStatus" android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:text="Disconnected" android:textColor="#FFF" android:textStyle="bold"/>
+                  <TextView android:id="@+id/btnConnect" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="CONNECT" android:textColor="#FF6B00" android:textStyle="bold"/>
+              </LinearLayout>
+              <FrameLayout android:id="@+id/fragContainer" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
+              <LinearLayout android:layout_width="match_parent" android:layout_height="55dp" android:orientation="horizontal" android:background="#111">
+                  <TextView android:id="@+id/navMonitor" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="MONITOR" android:gravity="center" android:textColor="#FFF"/>
+                  <TextView android:id="@+id/navMap" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="MAP" android:gravity="center" android:textColor="#FFF"/>
+                  <TextView android:id="@+id/navSettings" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1" android:text="SETTING" android:gravity="center" android:textColor="#FFF"/>
+              </LinearLayout>
+          </LinearLayout>
+          EOF
+
+          cat > NtechCDI/app/src/main/res/layout/fragment_monitor.xml << 'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="30dp" android:gravity="center">
+              <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="0" android:textSize="100sp" android:textColor="#00FF00" android:textStyle="bold"/>
+              <TextView android:id="@+id/tvLim" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Limiter: --" android:textColor="#FFF" android:textSize="20sp"/>
+              <TextView android:id="@+id/tvMap" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Active Map: --" android:textColor="#FFF" android:layout_marginTop="10dp"/>
+              <Button android:id="@+id/btnRefresh" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="REFRESH FROM EEPROM" android:layout_marginTop="30dp"/>
+          </LinearLayout>
+          EOF
+
+          cat > NtechCDI/app/src/main/res/layout/fragment_map.xml << 'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical">
+              <Button android:id="@+id/btnSend" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE MAP TO EEPROM"/>
+              <ScrollView android:layout_width="match_parent" android:layout_height="match_parent"><TableLayout android:id="@+id/tbl1" android:layout_width="match_parent" android:layout_height="wrap_content" android:stretchColumns="1"/></ScrollView>
+          </LinearLayout>
+          EOF
+
+          cat > NtechCDI/app/src/main/res/layout/fragment_settings.xml << 'EOF'
+          <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android" android:layout_width="match_parent" android:layout_height="match_parent" android:orientation="vertical" android:padding="20dp">
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RPM Limiter" android:textColor="#FFF"/>
+              <EditText android:id="@+id/etLim" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFF" android:inputType="number"/>
+              <Button android:id="@+id/btnSaveLim" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE LIMITER"/>
+              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pulser Angle" android:textColor="#FFF" android:layout_marginTop="20dp"/>
+              <EditText android:id="@+id/etAng" android:layout_width="match_parent" android:layout_height="wrap_content" android:textColor="#FFF" android:inputType="number"/>
+              <Button android:id="@+id/btnSaveAng" android:layout_width="match_parent" android:layout_height="wrap_content" android:text="SAVE ANGLE"/>
+          </LinearLayout>
+          EOF
+
+      - name: Write Config & Manifest
+        run: |
+          cat > NtechCDI/app/src/main/AndroidManifest.xml << 'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi">
+              <uses-permission android:name="android.permission.BLUETOOTH"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" android:maxSdkVersion="32"/>
+              <uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:maxSdkVersion="32"/>
+              <application android:theme="@style/AppTheme" android:label="@string/app_name">
+                  <activity android:name=".MainActivity" android:exported="true" android:screenOrientation="portrait">
+                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > NtechCDI/build.gradle << 'EOF'
+          buildscript {
+              repositories { google(); mavenCentral() }
+              dependencies { classpath 'com.android.tools.build:gradle:8.1.1'; classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:1.8.20' }
+          }
+          allprojects { repositories { google(); mavenCentral() } }
+          EOF
+
+          cat > NtechCDI/app/build.gradle << 'EOF'
+          plugins { id 'com.android.application'; id 'kotlin-android' }
+          android { namespace 'com.ntech.cdi'; compileSdk 34; defaultConfig { minSdk 26; targetSdk 34 }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
+              kotlinOptions { jvmTarget = '17' }
+          }
+          dependencies { implementation 'androidx.appcompat:appcompat:1.6.1'; implementation 'com.google.android.material:material:1.9.0'; implementation "org.jetbrains.kotlin:kotlin-stdlib:1.8.20" }
+          EOF
+
+          echo "include ':app'" > NtechCDI/settings.gradle
+          echo "android.useAndroidX=true" > NtechCDI/gradle.properties
+
       - name: Build APK
         run: |
+          cd NtechCDI
+          gradle wrapper --gradle-version 8.1.1
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NTECH-CDI-ULTIMATE
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: NTECH-CDI-FINAL
+          path: NtechCDI/app/build/outputs/apk/debug/app-debug.apk
