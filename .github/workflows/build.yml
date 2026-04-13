@@ -181,7 +181,7 @@ jobs:
           }
           """)
 
-          # 3. FRAGMENTS (dengan thread safety)
+          # 3. FRAGMENTS
           w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
           import android.os.Bundle
           import android.view.*
@@ -277,7 +277,14 @@ jobs:
         run: |
           mkdir -p NtechCDI/app/src/main/res/layout
           mkdir -p NtechCDI/app/src/main/res/values
-          echo '<resources><style name="AppTheme" parent="Theme.AppCompat.NoActionBar"><item name="android:windowBackground">#000</item></resources>' > NtechCDI/app/src/main/res/values/styles.xml
+          # Perbaikan: tutup tag style dengan </style>
+          cat > NtechCDI/app/src/main/res/values/styles.xml << 'EOF'
+          <resources>
+              <style name="AppTheme" parent="Theme.AppCompat.NoActionBar">
+                  <item name="android:windowBackground">#000</item>
+              </style>
+          </resources>
+          EOF
           echo '<resources><string name="app_name">NTECH TUNER</string></resources>' > NtechCDI/app/src/main/res/values/strings.xml
 
           cat > NtechCDI/app/src/main/res/layout/activity_main.xml << 'EOF'
@@ -358,11 +365,14 @@ jobs:
           echo "include ':app'" > NtechCDI/settings.gradle
           echo "android.useAndroidX=true" > NtechCDI/gradle.properties
 
-      - name: Build APK
+      - name: Generate Gradle Wrapper & Build APK
         run: |
           cd NtechCDI
+          # Generate wrapper terlebih dahulu
           gradle wrapper --gradle-version 8.1.1
+          # Beri izin eksekusi pada gradlew
           chmod +x gradlew
+          # Build APK
           ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
