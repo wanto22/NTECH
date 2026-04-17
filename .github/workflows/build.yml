@@ -1,4 +1,4 @@
-name: Build NTECH CDI Tuner APK v3
+name: Build NTECH CDI Tuner v5.7F APK
 
 on:
   push:
@@ -27,7 +27,7 @@ jobs:
           unzip -q /tmp/gradle.zip -d /opt
           echo "/opt/gradle-8.2/bin" >> $GITHUB_PATH
 
-      - name: Write all Kotlin source files
+      - name: Write Kotlin source files
         run: |
           python3 - << 'PYEOF'
           import os
@@ -40,69 +40,86 @@ jobs:
           PKG = B + "/app/src/main/java/com/ntech/cdi"
           UI  = PKG + "/ui"
 
-          # ── CdiConfig.kt ─────────────────────────────────────
+          # ── CdiConfig.kt ──────────────────────────────────
           w(PKG + "/CdiConfig.kt", r"""package com.ntech.cdi
 
+          // Semua nilai sesuai protokol v5.7F
+          // SCR: dalam ticks (1 tick = 0.5µs, prescaler 8, Timer1 2MHz)
+          // RPM  = 120.000.000 / period_ticks (2-tak, Timer1 2MHz)
           class CdiConfig {
-              val map1 = IntArray(32) { defaultMap1[it] }
-              val map2 = IntArray(32) { defaultMap2[it] }
-              val map3 = IntArray(32) { defaultMap3[it] }
+              val map1 = IntArray(32) { DEF_MAP1[it] }
+              val map2 = IntArray(32) { DEF_MAP2[it] }
+              val map3 = IntArray(32) { DEF_MAP3[it] }
               var rpmLimiter  = 12000
               var pulserAngle = 63
-              var scrPulse    = 1000
+              var scrPulse    = 1000   // ticks (1000 ticks = 500µs)
               var rumbleRpm   = 0
               var rumbleSkip  = 3
               var activeMap   = 1
-              var edge        = 0
+              var edge        = 0      // 0=Falling, 1=Rising
               var lastRpm     = 0
-              var lastAdvance = 0.0f  // derajat advance aktual = pulserAngle - delay_fraction
 
               companion object {
-                  val defaultMap1 = intArrayOf(0,8,15,20,24,28,30,32,34,34,34,34,34,34,34,34,34,34,34,34,34,32,30,27,23,19,17,15,15,15,10,10)
-                  val defaultMap2 = intArrayOf(0,6,12,18,22,26,28,30,32,32,32,32,32,32,32,32,32,32,32,30,28,26,24,22,20,17,15,12,12,12,8,8)
-                  val defaultMap3 = intArrayOf(0,5,12,18,24,30,34,36,38,40,40,40,40,40,38,36,34,32,30,28,26,24,22,20,18,15,12,10,10,10,8,8)
-                  // RPM per index (step 500 RPM, index 0 = idle ~500)
-                  val rpmSteps = intArrayOf(333,667,1000,1333,1667,2000,2333,2667,3000,3333,3667,4000,4333,4667,5000,5333,5667,6000,6333,6667,7000,7333,7667,8000,8333,8667,9000,9333,9667,10000,10333,10667)
-                  fun tickToUs(tick: Int) = tick / 2
+                  val DEF_MAP1 = intArrayOf(5,8,15,20,24,28,30,32,34,34,34,34,34,34,34,34,34,34,34,34,34,32,30,27,23,19,17,15,15,15,10,10)
+                  val DEF_MAP2 = intArrayOf(5,6,12,18,22,26,28,30,32,32,32,32,32,32,32,32,32,32,32,30,28,26,24,22,20,17,15,12,12,12,8,8)
+                  val DEF_MAP3 = intArrayOf(5,5,12,18,24,30,34,36,38,40,40,40,40,40,38,36,34,32,30,28,26,24,22,20,18,15,12,10,10,10,8,8)
+                  // RPM steps per index (Timer1 2MHz, 0.5µs/tick)
+                  val RPM_STEPS = intArrayOf(
+                      500,1000,1500,2000,2500,3000,3500,4000,
+                      4500,5000,5500,6000,6500,7000,7500,8000,
+                      8500,9000,9500,10000,10500,11000,11500,12000,
+                      12500,13000,13500,14000,14500,15000,15500,16000
+                  )
+                  fun tickToUs(tick: Int) = tick / 2   // 1 tick=0.5µs
                   fun usToTick(us: Int)   = us * 2
+                  fun rpmLabel(i: Int)    = if (i < RPM_STEPS.size) "${RPM_STEPS[i]}" else "-"
               }
 
-              fun activeMapArray() = when (activeMap) { 2 -> map2; 3 -> map3; else -> map1 }
+              fun mapArray(m: Int) = when (m) { 2 -> map2; 3 -> map3; else -> map1 }
+              fun activeMapArray() = mapArray(activeMap)
 
-              fun getAdvanceForRpm(rpm: Int): Int {
-                  val arr = activeMapArray()
+              fun getAdvForRpm(rpm: Int): Int {
                   val idx = ((rpm / 500) - 1).coerceIn(0, 31)
-                  return arr[idx]
+                  return activeMapArray()[idx]
               }
 
-              // true = config data (dari GET response), false = live/ack
+              // true = data config (dari GET), false = live/ack
               fun parseLine(line: String): Boolean {
                   return when {
-                      line.startsWith("RPM:") -> {
-                          lastRpm = line.removePrefix("RPM:").toIntOrNull() ?: lastRpm
-                          lastAdvance = getAdvanceForRpm(lastRpm).toFloat()
-                          false
-                      }
+                      line.startsWith("RPM:") -> { lastRpm = line.removePrefix("RPM:").toIntOrNull() ?: lastRpm; false }
                       line.startsWith("ACT:") -> { activeMap = line.removePrefix("ACT:").toIntOrNull() ?: activeMap; false }
                       line == "OK" || line == "ERR" -> false
-                      line.startsWith("LIM:") -> { rpmLimiter  = line.removePrefix("LIM:").toIntOrNull() ?: rpmLimiter; true }
+                      line.startsWith("LIM:") -> { rpmLimiter  = line.removePrefix("LIM:").toIntOrNull() ?: rpmLimiter;  true }
                       line.startsWith("ANG:") -> { pulserAngle = line.removePrefix("ANG:").toIntOrNull() ?: pulserAngle; true }
-                      line.startsWith("SCR:") -> { scrPulse    = line.removePrefix("SCR:").toIntOrNull() ?: scrPulse; true }
-                      line.startsWith("RBL:") -> { rumbleRpm   = line.removePrefix("RBL:").toIntOrNull() ?: rumbleRpm; true }
-                      line.startsWith("RSK:") -> { rumbleSkip  = line.removePrefix("RSK:").toIntOrNull() ?: rumbleSkip; true }
-                      line.startsWith("EDG:") -> { edge        = line.removePrefix("EDG:").toIntOrNull() ?: edge; true }
-                      line.startsWith("M1:") -> { line.removePrefix("M1:").split(",").forEachIndexed { i, v -> if (i < 32) map1[i] = v.trim().toIntOrNull() ?: map1[i] }; true }
-                      line.startsWith("M2:") -> { line.removePrefix("M2:").split(",").forEachIndexed { i, v -> if (i < 32) map2[i] = v.trim().toIntOrNull() ?: map2[i] }; true }
-                      line.startsWith("M3:") -> { line.removePrefix("M3:").split(",").forEachIndexed { i, v -> if (i < 32) map3[i] = v.trim().toIntOrNull() ?: map3[i] }; true }
+                      line.startsWith("SCR:") -> { scrPulse    = line.removePrefix("SCR:").toIntOrNull() ?: scrPulse;    true }
+                      line.startsWith("RBL:") -> { rumbleRpm   = line.removePrefix("RBL:").toIntOrNull() ?: rumbleRpm;   true }
+                      line.startsWith("RSK:") -> { rumbleSkip  = line.removePrefix("RSK:").toIntOrNull() ?: rumbleSkip;  true }
+                      line.startsWith("EDG:") -> { edge        = line.removePrefix("EDG:").toIntOrNull() ?: edge;        true }
+                      line.startsWith("M1:") -> {
+                          line.removePrefix("M1:").split(",").forEachIndexed { i, v ->
+                              if (i < 32) map1[i] = v.trim().toIntOrNull()?.coerceIn(0,60) ?: map1[i]
+                          }; true
+                      }
+                      line.startsWith("M2:") -> {
+                          line.removePrefix("M2:").split(",").forEachIndexed { i, v ->
+                              if (i < 32) map2[i] = v.trim().toIntOrNull()?.coerceIn(0,60) ?: map2[i]
+                          }; true
+                      }
+                      line.startsWith("M3:") -> {
+                          line.removePrefix("M3:").split(",").forEachIndexed { i, v ->
+                              if (i < 32) map3[i] = v.trim().toIntOrNull()?.coerceIn(0,60) ?: map3[i]
+                          }; true
+                      }
                       else -> false
                   }
               }
 
-              fun buildMapCmd(prefix: String, arr: IntArray) = prefix + ":" + arr.joinToString(",") + "\r\n"
+              fun buildMapCmd(prefix: String, arr: IntArray) =
+                  "$prefix:${arr.joinToString(",")}\r\n"
           }
           """)
 
-          # ── MainActivity.kt ───────────────────────────────────
+          # ── MainActivity.kt ───────────────────────────────
           w(PKG + "/MainActivity.kt", r"""package com.ntech.cdi
 
           import android.Manifest
@@ -124,11 +141,13 @@ jobs:
           class MainActivity : AppCompatActivity() {
 
               companion object {
-                  var btSocket: BluetoothSocket? = null
+                  var socket: BluetoothSocket? = null
                   var outStream: OutputStream? = null
                   var inStream:  InputStream?  = null
                   var isConnected = false
                   val config = CdiConfig()
+
+                  // Multi-callback: tiap fragment daftar sendiri
                   private val callbacks = mutableMapOf<String, (String, Boolean) -> Unit>()
                   fun registerCallback(tag: String, cb: (String, Boolean) -> Unit) { callbacks[tag] = cb }
                   fun unregisterCallback(tag: String) { callbacks.remove(tag) }
@@ -137,21 +156,19 @@ jobs:
 
               private lateinit var tvStatus: TextView
               private lateinit var btnConnect: TextView
-              private lateinit var tvInfo: TextView
-              private lateinit var navMonitor: TextView
-              private lateinit var navMap: TextView
-              private lateinit var navConfig: TextView
-              private lateinit var navRumble: TextView
+              private lateinit var tvDevice: TextView
+              private lateinit var nav0: TextView
+              private lateinit var nav1: TextView
+              private lateinit var nav2: TextView
 
-              private val pickImage = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
+              private val reqBt = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { p ->
+                  if (p.values.all { it }) showBtDialog() else toast("Izin Bluetooth diperlukan")
+              }
+              private val pickBg = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
                   uri?.let {
                       getSharedPreferences("ntech", MODE_PRIVATE).edit().putString("bg_uri", it.toString()).apply()
                       applyBg(it.toString())
                   }
-              }
-              private val reqBt = registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { p ->
-                  if (p.values.all { it }) showBtDialog()
-                  else toast("Izin Bluetooth diperlukan")
               }
 
               override fun onCreate(s: Bundle?) {
@@ -159,17 +176,15 @@ jobs:
                   setContentView(R.layout.activity_main)
                   tvStatus   = findViewById(R.id.tvStatus)
                   btnConnect = findViewById(R.id.btnConnect)
-                  tvInfo     = findViewById(R.id.tvInfo)
-                  navMonitor = findViewById(R.id.navMonitor)
-                  navMap     = findViewById(R.id.navMap)
-                  navConfig  = findViewById(R.id.navConfig)
-                  navRumble  = findViewById(R.id.navRumble)
+                  tvDevice   = findViewById(R.id.tvDevice)
+                  nav0       = findViewById(R.id.nav0)
+                  nav1       = findViewById(R.id.nav1)
+                  nav2       = findViewById(R.id.nav2)
                   getSharedPreferences("ntech", MODE_PRIVATE).getString("bg_uri", null)?.let { applyBg(it) }
                   btnConnect.setOnClickListener { if (isConnected) disconnect() else checkBt() }
-                  navMonitor.setOnClickListener { showTab(0) }
-                  navMap.setOnClickListener     { showTab(1) }
-                  navConfig.setOnClickListener  { showTab(2) }
-                  navRumble.setOnClickListener  { showTab(3) }
+                  nav0.setOnClickListener { showTab(0) }
+                  nav1.setOnClickListener { showTab(1) }
+                  nav2.setOnClickListener { showTab(2) }
                   showTab(0); updateUI()
               }
 
@@ -179,17 +194,16 @@ jobs:
                       findViewById<android.widget.FrameLayout>(R.id.fragContainer).background = BitmapDrawable(resources, bmp)
                   } catch (e: Exception) { }
               }
-              fun changeBg() = pickImage.launch("image/*")
+              fun changeBg() = pickBg.launch("image/*")
 
               private fun showTab(t: Int) {
-                  val f: Fragment = when (t) { 0 -> MonitorFragment(); 1 -> MapFragment(); 2 -> ConfigFragment(); else -> RumbleFragment() }
+                  val f: Fragment = when (t) { 0 -> MonitorFragment(); 1 -> KurvaFragment(); else -> SettingFragment() }
                   supportFragmentManager.beginTransaction().replace(R.id.fragContainer, f).commit()
-                  val teal  = 0xFF00BFA5.toInt()
-                  val white = 0xFFFFFFFF.toInt()
-                  navMonitor.setTextColor(if (t==0) teal else white)
-                  navMap.setTextColor(if (t==1) teal else white)
-                  navConfig.setTextColor(if (t==2) teal else white)
-                  navRumble.setTextColor(if (t==3) teal else white)
+                  val on  = 0xFF00E5FF.toInt()
+                  val off = 0xFF8899AA.toInt()
+                  nav0.setTextColor(if (t == 0) on else off)
+                  nav1.setTextColor(if (t == 1) on else off)
+                  nav2.setTextColor(if (t == 2) on else off)
               }
 
               private fun checkBt() {
@@ -203,29 +217,34 @@ jobs:
                   val ba = BluetoothAdapter.getDefaultAdapter() ?: run { toast("BT tidak tersedia"); return }
                   if (!ba.isEnabled) { toast("Aktifkan Bluetooth"); return }
                   val p = ba.bondedDevices.toList()
-                  if (p.isEmpty()) { toast("Tidak ada perangkat"); return }
-                  AlertDialog.Builder(this)
-                      .setTitle("Pilih HC-05")
-                      .setItems(p.map { "${it.name} | ${it.address}" }.toTypedArray()) { _, i -> connectBt(p[i]) }
+                  if (p.isEmpty()) { toast("Tidak ada perangkat HC-05"); return }
+                  AlertDialog.Builder(this).setTitle("Pilih HC-05")
+                      .setItems(p.map { "${it.name}  ${it.address}" }.toTypedArray()) { _, i -> connectBt(p[i]) }
                       .show()
               }
 
               @SuppressLint("MissingPermission")
               private fun connectBt(dev: BluetoothDevice) {
-                  tvStatus.text = "Menghubungkan..."; tvStatus.setTextColor(0xFFFF9800.toInt())
+                  tvStatus.text = "Menghubungkan..."
+                  tvStatus.setTextColor(0xFFFFAA00.toInt())
                   Thread {
                       try {
                           val s = dev.createRfcommSocketToServiceRecord(UUID.fromString("00001101-0000-1000-8000-00805F9B34FB"))
-                          s.connect(); btSocket = s; outStream = s.outputStream; inStream = s.inputStream; isConnected = true
-                          runOnUiThread { updateUI(dev.name) }; startRead(); sendCmd("GET\r\n")
+                          s.connect()
+                          socket = s; outStream = s.outputStream; inStream = s.inputStream; isConnected = true
+                          runOnUiThread { updateUI(dev.name) }
+                          startReading()
+                          // Langsung tarik data EEPROM setelah konek
+                          Thread.sleep(400)
+                          sendCmd("GET\r\n")
                       } catch (e: Exception) {
                           isConnected = false
-                          runOnUiThread { tvStatus.text = "Gagal"; tvStatus.setTextColor(0xFFFF5252.toInt()); toast(e.message ?: "Error") }
+                          runOnUiThread { tvStatus.text = "Gagal konek"; tvStatus.setTextColor(0xFFFF5252.toInt()); toast(e.message ?: "Error") }
                       }
                   }.start()
               }
 
-              private fun startRead() {
+              private fun startReading() {
                   Thread {
                       val buf = ByteArray(256); val sb = StringBuilder()
                       while (isConnected) {
@@ -235,31 +254,40 @@ jobs:
                                   sb.append(String(buf, 0, n))
                                   var idx: Int
                                   while (sb.indexOf("\n").also { idx = it } >= 0) {
-                                      val line = sb.substring(0, idx).trim(); sb.delete(0, idx + 1)
-                                      if (line.isNotEmpty()) { val c = config.parseLine(line); runOnUiThread { dispatch(line, c) } }
+                                      val line = sb.substring(0, idx).trim()
+                                      sb.delete(0, idx + 1)
+                                      if (line.isNotEmpty()) {
+                                          val isCfg = config.parseLine(line)
+                                          runOnUiThread { dispatch(line, isCfg) }
+                                      }
                                   }
                               }
                           } catch (e: Exception) { break }
                       }
+                      isConnected = false
+                      runOnUiThread { updateUI() }
                   }.start()
               }
 
-              fun sendCmd(cmd: String) { Thread { try { outStream?.write(cmd.toByteArray()) } catch (e: Exception) { } }.start() }
+              fun sendCmd(cmd: String) {
+                  Thread { try { outStream?.write(cmd.toByteArray()) } catch (e: Exception) { } }.start()
+              }
 
               private fun disconnect() {
-                  isConnected = false; try { btSocket?.close() } catch (e: Exception) { }
-                  btSocket = null; outStream = null; inStream = null; updateUI()
+                  isConnected = false
+                  try { socket?.close() } catch (e: Exception) { }
+                  socket = null; outStream = null; inStream = null; updateUI()
               }
 
               private fun updateUI(name: String = "") {
                   if (isConnected) {
-                      tvStatus.text = "Terhubung ke CDI"; tvStatus.setTextColor(0xFF00E676.toInt())
-                      tvInfo.text = name; btnConnect.text = "Putuskan"
+                      tvStatus.text = "Terhubung"; tvStatus.setTextColor(0xFF00FF88.toInt())
+                      tvDevice.text = name; btnConnect.text = "Putuskan"
                       btnConnect.setBackgroundColor(0xFFCC3333.toInt())
                   } else {
                       tvStatus.text = "Tidak Terhubung"; tvStatus.setTextColor(0xFFFF5252.toInt())
-                      tvInfo.text = ""; btnConnect.text = "Hubungkan"
-                      btnConnect.setBackgroundColor(0xFF00BFA5.toInt())
+                      tvDevice.text = ""; btnConnect.text = "Hubungkan BT"
+                      btnConnect.setBackgroundColor(0xFF006688.toInt())
                   }
               }
 
@@ -267,7 +295,7 @@ jobs:
           }
           """)
 
-          # ── MonitorFragment.kt ────────────────────────────────
+          # ── MonitorFragment.kt ────────────────────────────
           w(UI + "/MonitorFragment.kt", r"""package com.ntech.cdi.ui
 
           import android.graphics.*
@@ -275,151 +303,158 @@ jobs:
           import android.view.*
           import android.widget.*
           import androidx.fragment.app.Fragment
+          import com.ntech.cdi.CdiConfig
           import com.ntech.cdi.MainActivity
           import com.ntech.cdi.R
           import kotlin.math.*
 
           class MonitorFragment : Fragment() {
 
-              private lateinit var gaugeView: GaugeView
               private lateinit var tvRpm: TextView
               private lateinit var tvAdv: TextView
-              private lateinit var tvFirmware: TextView
-              private lateinit var tvSerial: TextView
-              private lateinit var tvActiveMap: TextView
-              private lateinit var chartView: RpmChartView
-              private val rpmHistory = ArrayDeque<Int>(60)
+              private lateinit var tvEdge: TextView
+              private lateinit var tvRumble: TextView
+              private lateinit var tvMap: TextView
+              private lateinit var tvLimiter: TextView
+              private lateinit var tvAngle: TextView
+              private lateinit var gauge: GaugeView
+              private lateinit var tvMaxRpm: TextView
+              private var maxRpm = 0
 
               override fun onCreateView(inf: LayoutInflater, c: ViewGroup?, s: Bundle?): View? =
                   inf.inflate(R.layout.fragment_monitor, c, false)
 
               override fun onViewCreated(view: View, s: Bundle?) {
-                  gaugeView   = view.findViewById(R.id.gaugeView)
-                  tvRpm       = view.findViewById(R.id.tvRpm)
-                  tvAdv       = view.findViewById(R.id.tvAdv)
-                  tvFirmware  = view.findViewById(R.id.tvFirmware)
-                  tvSerial    = view.findViewById(R.id.tvSerial)
-                  tvActiveMap = view.findViewById(R.id.tvActiveMap)
-                  chartView   = view.findViewById(R.id.chartView)
-                  tvFirmware.text  = "V5.7F"
-                  tvSerial.text    = "CDI-5TF"
-                  updateDisplay()
-                  MainActivity.registerCallback("monitor") { _, _ -> activity?.runOnUiThread { updateDisplay() } }
+                  tvRpm     = view.findViewById(R.id.tvRpm)
+                  tvAdv     = view.findViewById(R.id.tvAdv)
+                  tvEdge    = view.findViewById(R.id.tvEdge)
+                  tvRumble  = view.findViewById(R.id.tvRumble)
+                  tvMap     = view.findViewById(R.id.tvMap)
+                  tvLimiter = view.findViewById(R.id.tvLimiter)
+                  tvAngle   = view.findViewById(R.id.tvAngle)
+                  gauge     = view.findViewById(R.id.gauge)
+                  tvMaxRpm  = view.findViewById(R.id.tvMaxRpm)
+
+                  view.findViewById<TextView>(R.id.btnResetMax).setOnClickListener {
+                      maxRpm = 0; tvMaxRpm.text = "Max: 0"
+                  }
+                  view.findViewById<TextView>(R.id.btnPullData).setOnClickListener {
+                      if (MainActivity.isConnected) {
+                          (activity as? MainActivity)?.sendCmd("GET\r\n")
+                          (activity as? MainActivity)?.toast("Menarik data EEPROM...")
+                      } else {
+                          (activity as? MainActivity)?.toast("Tidak terhubung!")
+                      }
+                  }
+
+                  updateUI()
+                  MainActivity.registerCallback("monitor") { _, _ ->
+                      activity?.runOnUiThread { updateUI() }
+                  }
               }
 
-              private fun updateDisplay() {
+              private fun updateUI() {
                   val cfg = MainActivity.config
                   val rpm = cfg.lastRpm
-                  val adv = cfg.lastAdvance
-                  tvRpm.text = rpm.toString()
-                  tvAdv.text = String.format("%.1f°", adv)
-                  val mn = when (cfg.activeMap) { 2 -> "Map 2"; 3 -> "Map 3"; else -> "Map 1" }
-                  tvActiveMap.text = mn
-                  gaugeView.setRpm(rpm, cfg.rpmLimiter)
-                  rpmHistory.addLast(rpm)
-                  if (rpmHistory.size > 60) rpmHistory.removeFirst()
-                  chartView.setData(rpmHistory.toList(), cfg.rpmLimiter)
+                  val adv = cfg.getAdvForRpm(rpm)
+
+                  if (rpm > maxRpm) { maxRpm = rpm; tvMaxRpm.text = "Max: $maxRpm RPM" }
+
+                  tvRpm.text  = rpm.toString()
+                  tvAdv.text  = "$adv°"
+                  tvEdge.text = "Edge: ${if (cfg.edge == 0) "FALLING ↓" else "RISING ↑"}"
+                  tvRumble.text = if (cfg.rumbleRpm > 0)
+                      "Rumble: ON — aktif < ${cfg.rumbleRpm} RPM (skip ${cfg.rumbleSkip})"
+                  else "Rumble: OFF"
+
+                  val mapName = when (cfg.activeMap) { 2 -> "Map 2 Touring"; 3 -> "Map 3 Racing"; else -> "Map 1 Harian" }
+                  tvMap.text     = "Aktif: $mapName"
+                  tvLimiter.text = "Limiter: ${cfg.rpmLimiter} RPM"
+                  tvAngle.text   = "Pulser: ${cfg.pulserAngle}°"
+
+                  gauge.setRpm(rpm, cfg.rpmLimiter)
+
+                  // Warna RPM
+                  tvRpm.setTextColor(when {
+                      rpm >= cfg.rpmLimiter        -> 0xFFFF3333.toInt()
+                      rpm >= cfg.rpmLimiter * 0.85 -> 0xFFFFAA00.toInt()
+                      rpm > 0                      -> 0xFF00FF88.toInt()
+                      else                         -> 0xFF88AACC.toInt()
+                  })
               }
 
-              override fun onDestroyView() { super.onDestroyView(); MainActivity.unregisterCallback("monitor") }
+              override fun onDestroyView() {
+                  super.onDestroyView()
+                  MainActivity.unregisterCallback("monitor")
+              }
           }
 
-          // ── Analog Gauge View ─────────────────────────────────
+          // ── Analog Gauge ──────────────────────────────────
           class GaugeView(context: android.content.Context, attrs: android.util.AttributeSet? = null) : View(context, attrs) {
               private var rpm = 0; private var maxRpm = 12000
-              private val paintBg    = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A2035"); style = Paint.Style.FILL }
-              private val paintArc   = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 18f; strokeCap = Paint.Cap.ROUND }
-              private val paintTick  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#CCCCCC"); strokeWidth = 2f }
-              private val paintRed   = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FF3333"); strokeWidth = 2f }
-              private val paintNeedle= Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = 4f; strokeCap = Paint.Cap.ROUND }
-              private val paintText  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#888888"); textAlign = Paint.Align.CENTER; textSize = 24f }
+              private val pBg     = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#0A1520"); style = Paint.Style.FILL }
+              private val pArcBg  = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 22f; color = Color.parseColor("#1A2840") }
+              private val pArc    = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 22f; strokeCap = Paint.Cap.ROUND }
+              private val pTick   = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#445566"); strokeWidth = 2f }
+              private val pTickHi = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#FF4444"); strokeWidth = 2f }
+              private val pNeedle = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; strokeWidth = 5f; strokeCap = Paint.Cap.ROUND }
+              private val pText   = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#7799AA"); textAlign = Paint.Align.CENTER }
 
               fun setRpm(r: Int, max: Int) { rpm = r; maxRpm = max; invalidate() }
 
               override fun onDraw(canvas: Canvas) {
                   val w = width.toFloat(); val h = height.toFloat()
-                  val cx = w / 2; val cy = h * 0.55f
-                  val radius = minOf(w, h) * 0.42f
-                  canvas.drawCircle(cx, cy, radius + 10, paintBg)
-                  // Arc background
-                  val rect = RectF(cx - radius, cy - radius, cx + radius, cy + radius)
-                  paintArc.color = Color.parseColor("#1E3050"); paintArc.strokeWidth = 20f
-                  canvas.drawArc(rect, 150f, 240f, false, paintArc)
-                  // Arc fill (teal to red)
-                  val fraction = (rpm.toFloat() / maxRpm).coerceIn(0f, 1f)
-                  val sweep = fraction * 240f
-                  if (sweep > 0f) {
-                      paintArc.color = when {
-                          fraction > 0.85f -> Color.parseColor("#FF3333")
-                          fraction > 0.7f  -> Color.parseColor("#FF9800")
-                          else             -> Color.parseColor("#00BFA5")
+                  val cx = w / 2f; val cy = h * 0.58f
+                  val rad = minOf(w, h) * 0.40f
+                  canvas.drawCircle(cx, cy, rad + 14, pBg)
+                  val rect = RectF(cx - rad, cy - rad, cx + rad, cy + rad)
+                  canvas.drawArc(rect, 150f, 240f, false, pArcBg)
+                  val frac = (rpm.toFloat() / maxRpm.toFloat()).coerceIn(0f, 1f)
+                  if (frac > 0f) {
+                      pArc.color = when {
+                          frac > 0.85f -> Color.parseColor("#FF3333")
+                          frac > 0.70f -> Color.parseColor("#FFAA00")
+                          else         -> Color.parseColor("#00E5FF")
                       }
-                      canvas.drawArc(rect, 150f, sweep, false, paintArc)
+                      canvas.drawArc(rect, 150f, frac * 240f, false, pArc)
                   }
-                  // Ticks
-                  val steps = 18
+                  // Ticks + labels
+                  val steps = 16
                   for (i in 0..steps) {
-                      val angle = Math.toRadians(150.0 + i * (240.0 / steps))
-                      val frac  = i.toFloat() / steps
-                      val inner = if (i % 3 == 0) radius - 30f else radius - 20f
-                      val x1 = (cx + cos(angle) * (radius - 5)).toFloat()
-                      val y1 = (cy + sin(angle) * (radius - 5)).toFloat()
-                      val x2 = (cx + cos(angle) * inner).toFloat()
-                      val y2 = (cy + sin(angle) * inner).toFloat()
-                      val p  = if (frac > 0.85f) paintRed else paintTick
-                      canvas.drawLine(x1, y1, x2, y2, p)
-                      if (i % 3 == 0) {
-                          val rpmVal = ((frac * maxRpm) / 1000).toInt()
-                          val tx = (cx + cos(angle) * (inner - 20)).toFloat()
-                          val ty = (cy + sin(angle) * (inner - 20)).toFloat() + 8f
-                          paintText.textSize = radius * 0.12f
-                          canvas.drawText(rpmVal.toString(), tx, ty, paintText)
+                      val a = Math.toRadians(150.0 + i * (240.0 / steps))
+                      val fr = i.toFloat() / steps
+                      val inner = if (i % 4 == 0) rad - 32f else rad - 18f
+                      val x1 = (cx + cos(a) * (rad - 2)).toFloat()
+                      val y1 = (cy + sin(a) * (rad - 2)).toFloat()
+                      val x2 = (cx + cos(a) * inner).toFloat()
+                      val y2 = (cy + sin(a) * inner).toFloat()
+                      canvas.drawLine(x1, y1, x2, y2, if (fr > 0.85f) pTickHi else pTick)
+                      if (i % 4 == 0) {
+                          val kv = (fr * maxRpm / 1000).toInt()
+                          val tx = (cx + cos(a) * (inner - 18)).toFloat()
+                          val ty = (cy + sin(a) * (inner - 18)).toFloat() + 8f
+                          pText.textSize = rad * 0.13f
+                          canvas.drawText("${kv}k", tx, ty, pText)
                       }
                   }
                   // Needle
-                  val needleAngle = Math.toRadians(150.0 + fraction * 240.0)
-                  val nx = (cx + cos(needleAngle) * (radius - 25)).toFloat()
-                  val ny = (cy + sin(needleAngle) * (radius - 25)).toFloat()
-                  canvas.drawLine(cx, cy, nx, ny, paintNeedle)
-                  canvas.drawCircle(cx, cy, 8f, paintNeedle)
+                  val na = Math.toRadians(150.0 + frac * 240.0)
+                  val nx = (cx + cos(na) * (rad - 28)).toFloat()
+                  val ny = (cy + sin(na) * (rad - 28)).toFloat()
+                  canvas.drawLine(cx, cy, nx, ny, pNeedle)
+                  val pCenter = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00E5FF"); style = Paint.Style.FILL }
+                  canvas.drawCircle(cx, cy, 9f, pCenter)
               }
 
               override fun onMeasure(w: Int, h: Int) {
-                  val size = MeasureSpec.getSize(w)
-                  setMeasuredDimension(size, (size * 0.65f).toInt())
-              }
-          }
-
-          // ── RPM Chart View ────────────────────────────────────
-          class RpmChartView(context: android.content.Context, attrs: android.util.AttributeSet? = null) : View(context, attrs) {
-              private var data = listOf<Int>(); private var maxRpm = 12000
-              private val paintLine = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00BFA5"); strokeWidth = 3f; style = Paint.Style.STROKE }
-              private val paintFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#1A4040"); style = Paint.Style.FILL }
-              private val paintGrid = Paint().apply { color = Color.parseColor("#1E3050"); strokeWidth = 1f }
-
-              fun setData(d: List<Int>, max: Int) { data = d; maxRpm = max; invalidate() }
-
-              override fun onDraw(canvas: Canvas) {
-                  val w = width.toFloat(); val h = height.toFloat()
-                  canvas.drawRect(0f, 0f, w, h, paintFill)
-                  if (data.size < 2) return
-                  val path = Path(); val fill = Path()
-                  val step = w / (data.size - 1)
-                  data.forEachIndexed { i, v ->
-                      val x = i * step
-                      val y = h - (v.toFloat() / maxRpm * h)
-                      if (i == 0) { path.moveTo(x, y); fill.moveTo(x, h) } else path.lineTo(x, y)
-                      fill.lineTo(x, y)
-                  }
-                  fill.lineTo(w, h); fill.close()
-                  canvas.drawPath(fill, paintFill)
-                  canvas.drawPath(path, paintLine)
+                  val sz = MeasureSpec.getSize(w)
+                  setMeasuredDimension(sz, (sz * 0.60f).toInt())
               }
           }
           """)
 
-          # ── MapFragment.kt ────────────────────────────────────
-          w(UI + "/MapFragment.kt", r"""package com.ntech.cdi.ui
+          # ── KurvaFragment.kt ──────────────────────────────
+          w(UI + "/KurvaFragment.kt", r"""package com.ntech.cdi.ui
 
           import android.graphics.*
           import android.os.Bundle
@@ -432,102 +467,120 @@ jobs:
           import com.ntech.cdi.R
           import kotlin.math.*
 
-          class MapFragment : Fragment() {
+          class KurvaFragment : Fragment() {
 
+              private lateinit var chart: MapChartView
+              private lateinit var tableLayout: LinearLayout
+              private lateinit var tvMapLabel: TextView
               private var currentMap = 1
               private var isUpdating = false
               private val cells = Array(3) { arrayOfNulls<EditText>(32) }
-              private lateinit var chartView: IgnMapChartView
-              private lateinit var tableContainer: LinearLayout
-              private lateinit var tvMapTitle: TextView
-              private lateinit var spMap: Spinner
 
               override fun onCreateView(inf: LayoutInflater, c: ViewGroup?, s: Bundle?): View? =
-                  inf.inflate(R.layout.fragment_map, c, false)
+                  inf.inflate(R.layout.fragment_kurva, c, false)
 
               override fun onViewCreated(view: View, s: Bundle?) {
-                  chartView      = view.findViewById(R.id.ignChart)
-                  tableContainer = view.findViewById(R.id.tableContainer)
-                  tvMapTitle     = view.findViewById(R.id.tvMapTitle)
-                  spMap          = view.findViewById(R.id.spMap)
+                  chart       = view.findViewById(R.id.mapChart)
+                  tableLayout = view.findViewById(R.id.tableLayout)
+                  tvMapLabel  = view.findViewById(R.id.tvMapLabel)
 
-                  val maps = listOf("Map 1 - Harian", "Map 2 - Touring", "Map 3 - Racing")
-                  spMap.adapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_dropdown_item, maps)
-                  spMap.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                      override fun onItemSelected(p: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                          currentMap = pos + 1; refreshChart(); refreshTable()
-                      }
-                      override fun onNothingSelected(p: AdapterView<*>?) {}
-                  }
+                  // Tab map
+                  view.findViewById<TextView>(R.id.tabM1).setOnClickListener { selectMap(view, 1) }
+                  view.findViewById<TextView>(R.id.tabM2).setOnClickListener { selectMap(view, 2) }
+                  view.findViewById<TextView>(R.id.tabM3).setOnClickListener { selectMap(view, 3) }
 
-                  buildTable()
-                  refreshChart()
-
-                  view.findViewById<TextView>(R.id.btnSave).setOnClickListener {
+                  // Kirim map aktif ke CDI
+                  view.findViewById<TextView>(R.id.btnSendMap).setOnClickListener {
+                      if (!MainActivity.isConnected) { (activity as? MainActivity)?.toast("Tidak terhubung!"); return@setOnClickListener }
                       val cfg = MainActivity.config
-                      val arr = when (currentMap) { 2 -> cfg.map2; 3 -> cfg.map3; else -> cfg.map1 }
+                      val arr = cfg.mapArray(currentMap)
                       val pfx = when (currentMap) { 2 -> "M2"; 3 -> "M3"; else -> "M1" }
                       (activity as? MainActivity)?.sendCmd(cfg.buildMapCmd(pfx, arr))
                       (activity as? MainActivity)?.sendCmd("ACT:$currentMap\r\n")
-                      Toast.makeText(context, "Map $currentMap tersimpan", Toast.LENGTH_SHORT).show()
-                      refreshChart()
+                      (activity as? MainActivity)?.toast("Map $currentMap terkirim & disimpan EEPROM")
                   }
-                  view.findViewById<TextView>(R.id.btnSaveAll).setOnClickListener {
+                  // Kirim + simpan SEMUA map
+                  view.findViewById<TextView>(R.id.btnSendAll).setOnClickListener {
+                      if (!MainActivity.isConnected) { (activity as? MainActivity)?.toast("Tidak terhubung!"); return@setOnClickListener }
                       val cfg = MainActivity.config
                       val act = activity as? MainActivity
                       act?.sendCmd(cfg.buildMapCmd("M1", cfg.map1))
+                      Thread.sleep(80)
                       act?.sendCmd(cfg.buildMapCmd("M2", cfg.map2))
+                      Thread.sleep(80)
                       act?.sendCmd(cfg.buildMapCmd("M3", cfg.map3))
-                      act?.sendCmd("ACT:$currentMap\r\n")
-                      Toast.makeText(context, "Semua map tersimpan", Toast.LENGTH_SHORT).show()
+                      Thread.sleep(80)
+                      act?.sendCmd("ACT:${cfg.activeMap}\r\n")
+                      act?.toast("Semua map dikirim & disimpan EEPROM")
+                  }
+                  // Tarik data EEPROM
+                  view.findViewById<TextView>(R.id.btnPullData).setOnClickListener {
+                      if (!MainActivity.isConnected) { (activity as? MainActivity)?.toast("Tidak terhubung!"); return@setOnClickListener }
+                      (activity as? MainActivity)?.sendCmd("GET\r\n")
+                      (activity as? MainActivity)?.toast("Menarik data EEPROM...")
                   }
 
-                  MainActivity.registerCallback("map") { _, isCfg -> if (isCfg) activity?.runOnUiThread { refreshChart(); refreshTable() } }
+                  buildTable()
+                  selectMap(view, MainActivity.config.activeMap)
+
+                  // Refresh tabel hanya saat terima config (isConfig=true)
+                  MainActivity.registerCallback("kurva") { _, isCfg ->
+                      if (isCfg) activity?.runOnUiThread {
+                          refreshCells()
+                          refreshChart()
+                      }
+                  }
+              }
+
+              private fun selectMap(view: View, m: Int) {
+                  currentMap = m
+                  val on  = 0xFF00E5FF.toInt()
+                  val off = 0xFF334455.toInt()
+                  view.findViewById<TextView>(R.id.tabM1).setTextColor(if (m==1) on else off)
+                  view.findViewById<TextView>(R.id.tabM2).setTextColor(if (m==2) on else off)
+                  view.findViewById<TextView>(R.id.tabM3).setTextColor(if (m==3) on else off)
+                  val names = listOf("","Map 1 — Harian","Map 2 — Touring","Map 3 — Racing")
+                  tvMapLabel.text = names[m]
+                  refreshChart()
               }
 
               private fun buildTable() {
-                  tableContainer.removeAllViews()
+                  tableLayout.removeAllViews()
                   val cfg = MainActivity.config
-                  // Header row
-                  val hRow = LinearLayout(requireContext()).apply {
+                  // Header
+                  val headerRow = LinearLayout(requireContext()).apply {
                       orientation = LinearLayout.HORIZONTAL
-                      setBackgroundColor(Color.parseColor("#1A2035"))
+                      setBackgroundColor(Color.parseColor("#0A1828"))
                   }
-                  val hLabel = TextView(requireContext()).apply {
-                      text = ""; layoutParams = LinearLayout.LayoutParams(120, 56)
-                      setPadding(8, 0, 8, 0); gravity = Gravity.CENTER
-                  }
-                  hRow.addView(hLabel)
-                  val rpmLabels = listOf("333","667","1000","1333","1667","2000","2333","2667","3000","3333","3667","4000","4333","4667","5000","5333","5667","6000","6333","6667","7000","7333","7667","8000","8333","8667","9000","9333","9667","10000","10333","10667")
-                  for (lbl in rpmLabels) {
-                      hRow.addView(TextView(requireContext()).apply {
-                          text = lbl; layoutParams = LinearLayout.LayoutParams(120, 56)
-                          setTextColor(Color.parseColor("#00BFA5")); textSize = 11f
-                          setPadding(4, 0, 4, 0); gravity = Gravity.CENTER
-                      })
-                  }
-                  tableContainer.addView(hRow)
+                  headerRow.addView(makeCell("RPM", true, 130))
+                  headerRow.addView(makeCell("Map1°", true, 110))
+                  headerRow.addView(makeCell("Map2°", true, 110))
+                  headerRow.addView(makeCell("Map3°", true, 110))
+                  tableLayout.addView(headerRow)
 
-                  // Map rows
-                  val mapNames = listOf("Map1","Map2","Map3")
-                  val mapArrs  = listOf(cfg.map1, cfg.map2, cfg.map3)
-                  for (mi in 0..2) {
+                  for (i in 0 until 32) {
                       val row = LinearLayout(requireContext()).apply {
                           orientation = LinearLayout.HORIZONTAL
-                          setBackgroundColor(if (mi % 2 == 0) Color.parseColor("#0F1925") else Color.parseColor("#111E2E"))
+                          setBackgroundColor(if (i % 2 == 0) Color.parseColor("#0D1C2C") else Color.parseColor("#101F30"))
                       }
-                      row.addView(TextView(requireContext()).apply {
-                          text = mapNames[mi]; layoutParams = LinearLayout.LayoutParams(120, 60)
-                          setTextColor(Color.parseColor("#00BFA5")); textSize = 12f; setTypeface(typeface, Typeface.BOLD)
-                          setPadding(8, 0, 8, 0); gravity = Gravity.CENTER
+                      // RPM label
+                      row.addView(makeCell(CdiConfig.rpmLabel(i), false, 130).apply {
+                          setTextColor(when {
+                              i <= 5  -> Color.parseColor("#44FF88")
+                              i <= 15 -> Color.parseColor("#FFCC00")
+                              else    -> Color.parseColor("#FF6644")
+                          })
                       })
-                      for (ci in 0..31) {
-                          val idx = ci; val mapIdx = mi
-                          val arr = mapArrs[mapIdx]
+                      // 3 map cells
+                      for (mi in 0..2) {
+                          val arr = cfg.mapArray(mi + 1)
+                          val idx = i
+                          val mIdx = mi
                           val et = EditText(requireContext()).apply {
-                              layoutParams = LinearLayout.LayoutParams(120, 60)
+                              layoutParams = LinearLayout.LayoutParams(110, 56)
                               inputType = InputType.TYPE_CLASS_NUMBER
-                              gravity = Gravity.CENTER; textSize = 13f
+                              gravity = Gravity.CENTER
+                              textSize = 14f
                               setTypeface(typeface, Typeface.BOLD)
                               setText(arr[idx].toString())
                               setTextColor(Color.WHITE)
@@ -539,82 +592,129 @@ jobs:
                                   override fun afterTextChanged(s: Editable?) {
                                       if (isUpdating) return
                                       val v = s?.toString()?.toIntOrNull() ?: return
-                                      if (v in 0..60) arr[idx] = v
-                                      if (mapIdx + 1 == currentMap) refreshChart()
+                                      arr[idx] = v.coerceIn(0, 60)
+                                      if (mIdx + 1 == currentMap) refreshChart()
                                   }
                               })
                           }
-                          cells[mi][ci] = et; row.addView(et)
+                          cells[mi][i] = et
+                          row.addView(et)
                       }
-                      tableContainer.addView(row)
+                      tableLayout.addView(row)
                   }
               }
 
-              private fun refreshTable() {
+              private fun makeCell(text: String, bold: Boolean, w: Int): TextView {
+                  return TextView(requireContext()).apply {
+                      this.text = text
+                      layoutParams = LinearLayout.LayoutParams(w, 56)
+                      gravity = Gravity.CENTER
+                      textSize = 13f
+                      setTextColor(if (bold) Color.parseColor("#00E5FF") else Color.parseColor("#88AACC"))
+                      if (bold) setTypeface(typeface, Typeface.BOLD)
+                      setPadding(4, 0, 4, 0)
+                  }
+              }
+
+              private fun refreshCells() {
                   isUpdating = true
                   val cfg = MainActivity.config
-                  val arrs = listOf(cfg.map1, cfg.map2, cfg.map3)
-                  for (mi in 0..2) for (ci in 0..31) cells[mi][ci]?.setText(arrs[mi][ci].toString())
+                  for (mi in 0..2) {
+                      val arr = cfg.mapArray(mi + 1)
+                      for (i in 0 until 32) cells[mi][i]?.setText(arr[i].toString())
+                  }
                   isUpdating = false
               }
 
               private fun refreshChart() {
                   val cfg = MainActivity.config
-                  val arr = when (currentMap) { 2 -> cfg.map2; 3 -> cfg.map3; else -> cfg.map1 }
-                  chartView.setData(arr.toList(), currentMap)
+                  chart.setData(cfg.map1.toList(), cfg.map2.toList(), cfg.map3.toList(), currentMap)
               }
 
-              override fun onDestroyView() { super.onDestroyView(); MainActivity.unregisterCallback("map") }
+              override fun onDestroyView() {
+                  super.onDestroyView()
+                  MainActivity.unregisterCallback("kurva")
+              }
           }
 
-          // ── Ignition Map Chart ────────────────────────────────
-          class IgnMapChartView(context: android.content.Context, attrs: android.util.AttributeSet? = null) : View(context, attrs) {
-              private var data = listOf<Int>(); private var mapIdx = 1
-              private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { strokeWidth = 3f; style = Paint.Style.STROKE }
-              private val paintFill = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
-              private val paintGrid = Paint().apply { color = Color.parseColor("#1E3050"); strokeWidth = 1f }
-              private val paintText = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#888888"); textSize = 24f; textAlign = Paint.Align.RIGHT }
-              private val paintDot  = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
+          // ── Map Chart (3 kurva sekaligus) ─────────────────
+          class MapChartView(context: android.content.Context, attrs: android.util.AttributeSet? = null) : View(context, attrs) {
+              private var m1 = listOf<Int>(); private var m2 = listOf<Int>(); private var m3 = listOf<Int>()
+              private var active = 1
+              private val colors = listOf(Color.parseColor("#00E5FF"), Color.parseColor("#FFAA00"), Color.parseColor("#FF5544"))
+              private val paints = colors.map { c -> Paint(Paint.ANTI_ALIAS_FLAG).apply { color = c; style = Paint.Style.STROKE; strokeWidth = 3f } }
+              private val dotP   = colors.map { c -> Paint(Paint.ANTI_ALIAS_FLAG).apply { color = c; style = Paint.Style.FILL } }
+              private val pGrid  = Paint().apply { color = Color.parseColor("#1A2840"); strokeWidth = 1f }
+              private val pLabel = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#557788"); textSize = 22f; textAlign = Paint.Align.RIGHT }
+              private val pActBg = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 5f }
 
-              fun setData(d: List<Int>, mi: Int) { data = d; mapIdx = mi; invalidate() }
+              fun setData(a1: List<Int>, a2: List<Int>, a3: List<Int>, act: Int) {
+                  m1 = a1; m2 = a2; m3 = a3; active = act; invalidate()
+              }
 
               override fun onDraw(canvas: Canvas) {
                   val w = width.toFloat(); val h = height.toFloat()
-                  canvas.drawColor(Color.parseColor("#0A1520"))
-                  if (data.isEmpty()) return
-                  val padL = 50f; val padB = 10f; val padT = 20f; val padR = 10f
+                  val padL = 48f; val padR = 8f; val padT = 12f; val padB = 24f
                   val gw = w - padL - padR; val gh = h - padT - padB
-                  // Grid lines
-                  for (i in 0..4) {
-                      val y = padT + i * gh / 4
-                      canvas.drawLine(padL, y, w - padR, y, paintGrid)
-                      val lbl = (45 - i * 45 / 4).toString()
-                      paintText.textSize = 22f
-                      canvas.drawText(lbl, padL - 4, y + 8, paintText)
+
+                  canvas.drawColor(Color.parseColor("#080E18"))
+                  // Grid horizontal (setiap 10°)
+                  for (deg in 0..60 step 10) {
+                      val y = padT + gh - (deg.toFloat() / 60f * gh)
+                      canvas.drawLine(padL, y, w - padR, y, pGrid)
+                      pLabel.textSize = 20f
+                      canvas.drawText("$deg", padL - 4f, y + 7f, pLabel)
                   }
-                  val color = when (mapIdx) { 2 -> Color.parseColor("#FF9800"); 3 -> Color.parseColor("#FF3333"); else -> Color.parseColor("#00BFA5") }
-                  paint.color = color
-                  paintFill.color = Color.argb(40, Color.red(color), Color.green(color), Color.blue(color))
-                  paintDot.color  = color
-                  val step = gw / (data.size - 1)
-                  val path = Path(); val fill = Path()
-                  data.forEachIndexed { i, v ->
-                      val x = padL + i * step
-                      val y = padT + gh - (v.toFloat() / 45f * gh)
-                      if (i == 0) { path.moveTo(x, y); fill.moveTo(x, padT + gh) } else path.lineTo(x, y)
-                      fill.lineTo(x, y)
-                      canvas.drawCircle(x, y, 5f, paintDot)
+
+                  val maps = listOf(m1, m2, m3)
+                  // Gambar semua kurva, aktif paling akhir (di atas)
+                  val order = listOf(0,1,2).sortedBy { if (it + 1 == active) 1 else 0 }
+                  for (mi in order) {
+                      val data = maps[mi]
+                      if (data.isEmpty()) continue
+                      val step = gw / (data.size - 1)
+                      val path = Path()
+                      data.forEachIndexed { i, v ->
+                          val x = padL + i * step
+                          val y = padT + gh - (v.toFloat() / 60f * gh)
+                          if (i == 0) path.moveTo(x, y) else path.lineTo(x, y)
+                      }
+                      // Jika aktif, gambar lebih tebal
+                      if (mi + 1 == active) {
+                          pActBg.color = Color.argb(60, Color.red(colors[mi]), Color.green(colors[mi]), Color.blue(colors[mi]))
+                          canvas.drawPath(path, pActBg)
+                      }
+                      canvas.drawPath(path, paints[mi])
+                      // Dots hanya untuk map aktif
+                      if (mi + 1 == active) {
+                          data.forEachIndexed { i, v ->
+                              val x = padL + i * step
+                              val y = padT + gh - (v.toFloat() / 60f * gh)
+                              canvas.drawCircle(x, y, 4f, dotP[mi])
+                          }
+                      }
                   }
-                  fill.lineTo(padL + (data.size - 1) * step, padT + gh); fill.close()
-                  canvas.drawPath(fill, paintFill)
-                  canvas.drawPath(path, paint)
+                  // Legend
+                  val legendY = padT + 20f
+                  val lColors = listOf(Color.parseColor("#00E5FF"), Color.parseColor("#FFAA00"), Color.parseColor("#FF5544"))
+                  val lNames  = listOf("M1", "M2", "M3")
+                  for (i in 0..2) {
+                      val lp = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = lColors[i]; textSize = 24f }
+                      canvas.drawText("■ ${lNames[i]}", padL + 10f + i * 90f, legendY, lp)
+                  }
+              }
+
+              override fun onMeasure(w: Int, h: Int) {
+                  val width = MeasureSpec.getSize(w)
+                  setMeasuredDimension(width, (width * 0.55f).toInt())
               }
           }
           """)
 
-          # ── ConfigFragment.kt ─────────────────────────────────
-          w(UI + "/ConfigFragment.kt", r"""package com.ntech.cdi.ui
+          # ── SettingFragment.kt ────────────────────────────
+          w(UI + "/SettingFragment.kt", r"""package com.ntech.cdi.ui
 
+          import android.graphics.*
           import android.os.Bundle
           import android.view.*
           import android.widget.*
@@ -623,188 +723,250 @@ jobs:
           import com.ntech.cdi.MainActivity
           import com.ntech.cdi.R
 
-          class ConfigFragment : Fragment() {
+          class SettingFragment : Fragment() {
 
-              private lateinit var spEdge: Spinner
-              private lateinit var etAngle: EditText
-              private lateinit var etLim: EditText
-              private lateinit var etScr: EditText
+              private lateinit var etLimiter: EditText
+              private lateinit var etAngle:   EditText
+              private lateinit var etScr:     EditText
+              private lateinit var spEdge:    Spinner
+              private lateinit var etRumbleRpm: EditText
+              private lateinit var rumbleTable: LinearLayout
 
               override fun onCreateView(inf: LayoutInflater, c: ViewGroup?, s: Bundle?): View? =
-                  inf.inflate(R.layout.fragment_config, c, false)
+                  inf.inflate(R.layout.fragment_setting, c, false)
 
               override fun onViewCreated(view: View, s: Bundle?) {
-                  spEdge  = view.findViewById(R.id.spEdge)
-                  etAngle = view.findViewById(R.id.etAngle)
-                  etLim   = view.findViewById(R.id.etLim)
-                  etScr   = view.findViewById(R.id.etScr)
+                  etLimiter   = view.findViewById(R.id.etLimiter)
+                  etAngle     = view.findViewById(R.id.etAngle)
+                  etScr       = view.findViewById(R.id.etScr)
+                  spEdge      = view.findViewById(R.id.spEdge)
+                  etRumbleRpm = view.findViewById(R.id.etRumbleRpm)
+                  rumbleTable = view.findViewById(R.id.rumbleTable)
 
-                  val edgeOpts = listOf("Falling Edge ↓", "Rising Edge ↑")
-                  spEdge.adapter = ArrayAdapter(requireContext(), android.R.layout.simple_spinner_dropdown_item, edgeOpts)
+                  spEdge.adapter = ArrayAdapter(requireContext(),
+                      android.R.layout.simple_spinner_dropdown_item,
+                      listOf("FALLING ↓  (5V → 0V)", "RISING ↑  (0V → 5V)"))
 
                   loadConfig()
 
+                  // ── Kirim Limiter ─────────────────────────────
+                  view.findViewById<TextView>(R.id.btnSendLim).setOnClickListener {
+                      val v = etLimiter.text.toString().toIntOrNull()
+                      if (v != null && v in 1000..16000) {
+                          MainActivity.config.rpmLimiter = v
+                          sendAndSave("LIM:$v\r\n", "Limiter $v RPM")
+                      } else toast("Range: 1000 - 16000")
+                  }
+                  // ── Kirim Pulser Angle ─────────────────────────
                   view.findViewById<TextView>(R.id.btnSendAngle).setOnClickListener {
                       val v = etAngle.text.toString().toIntOrNull()
                       if (v != null && v in 30..120) {
                           MainActivity.config.pulserAngle = v
-                          send("ANG:$v\r\n", "Pulser Angle $v°")
-                      } else toast("Range: 30-120")
+                          sendAndSave("ANG:$v\r\n", "Pulser Angle $v°")
+                      } else toast("Range: 30 - 120")
                   }
-                  view.findViewById<TextView>(R.id.btnSendLim).setOnClickListener {
-                      val v = etLim.text.toString().toIntOrNull()
-                      if (v != null && v in 1000..16000) {
-                          MainActivity.config.rpmLimiter = v
-                          send("LIM:$v\r\n", "Limiter $v RPM")
-                      } else toast("Range: 1000-16000")
-                  }
+                  // ── Kirim SCR Pulse ────────────────────────────
+                  // Input dalam µs, konversi ke ticks: ticks = µs × 2
                   view.findViewById<TextView>(R.id.btnSendScr).setOnClickListener {
                       val us = etScr.text.toString().toIntOrNull()
-                      if (us != null) {
-                          val tick = CdiConfig.usToTick(us)
-                          if (tick in 200..4000) {
-                              MainActivity.config.scrPulse = tick
-                              send("SCR:$tick\r\n", "SCR ${us}us")
-                          } else toast("Range: 100-2000us")
-                      }
+                      if (us != null && us in 100..2000) {
+                          val ticks = CdiConfig.usToTick(us)
+                          MainActivity.config.scrPulse = ticks
+                          sendAndSave("SCR:$ticks\r\n", "SCR ${us}µs")
+                      } else toast("Range: 100 - 2000 µs")
                   }
+                  // ── Kirim Edge ─────────────────────────────────
                   view.findViewById<TextView>(R.id.btnSendEdge).setOnClickListener {
                       val e = spEdge.selectedItemPosition
                       MainActivity.config.edge = e
-                      send("EDG:$e\r\n", "Edge ${if(e==0)"Falling" else "Rising"}")
+                      sendAndSave("EDG:$e\r\n", "Edge ${if(e==0)"Falling" else "Rising"}")
                   }
-                  view.findViewById<TextView>(R.id.btnGet).setOnClickListener {
-                      if (MainActivity.isConnected) { (activity as? MainActivity)?.sendCmd("GET\r\n"); toast("Meminta config...") }
-                      else toast("Tidak terhubung")
-                  }
-                  view.findViewById<TextView>(R.id.btnChangeBg).setOnClickListener {
-                      (activity as? MainActivity)?.changeBg()
-                  }
-
-                  MainActivity.registerCallback("config") { _, isCfg -> if (isCfg) activity?.runOnUiThread { loadConfig() } }
-              }
-
-              private fun loadConfig() {
-                  val cfg = MainActivity.config
-                  etAngle.setText(cfg.pulserAngle.toString())
-                  etLim.setText(cfg.rpmLimiter.toString())
-                  etScr.setText(CdiConfig.tickToUs(cfg.scrPulse).toString())
-                  spEdge.setSelection(cfg.edge.coerceIn(0, 1))
-              }
-
-              private fun send(cmd: String, msg: String) {
-                  (activity as? MainActivity)?.sendCmd(cmd); toast("$msg tersimpan")
-              }
-              private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-
-              override fun onDestroyView() { super.onDestroyView(); MainActivity.unregisterCallback("config") }
-          }
-          """)
-
-          # ── RumbleFragment.kt ─────────────────────────────────
-          w(UI + "/RumbleFragment.kt", r"""package com.ntech.cdi.ui
-
-          import android.graphics.*
-          import android.os.Bundle
-          import android.view.*
-          import android.widget.*
-          import androidx.fragment.app.Fragment
-          import com.ntech.cdi.MainActivity
-          import com.ntech.cdi.R
-
-          class RumbleFragment : Fragment() {
-
-              private lateinit var cbEnable: CheckBox
-              private lateinit var etStartRpm: EditText
-              private lateinit var etSkip: EditText
-              private lateinit var beatGrid: BeatGridView
-
-              override fun onCreateView(inf: LayoutInflater, c: ViewGroup?, s: Bundle?): View? =
-                  inf.inflate(R.layout.fragment_rumble, c, false)
-
-              override fun onViewCreated(view: View, s: Bundle?) {
-                  cbEnable  = view.findViewById(R.id.cbEnable)
-                  etStartRpm= view.findViewById(R.id.etStartRpm)
-                  etSkip    = view.findViewById(R.id.etSkip)
-                  beatGrid  = view.findViewById(R.id.beatGrid)
-
-                  val cfg = MainActivity.config
-                  cbEnable.isChecked = cfg.rumbleRpm > 0
-                  etStartRpm.setText(if (cfg.rumbleRpm > 0) cfg.rumbleRpm.toString() else "1500")
-                  etSkip.setText(cfg.rumbleSkip.toString())
-
+                  // ── Kirim Rumble ───────────────────────────────
                   view.findViewById<TextView>(R.id.btnSendRumble).setOnClickListener {
-                      if (!cbEnable.isChecked) {
-                          MainActivity.config.rumbleRpm = 0
-                          (activity as? MainActivity)?.sendCmd("RBL:0\r\n")
-                          toast("Rumble dimatikan")
-                          return@setOnClickListener
+                      val rpm = etRumbleRpm.text.toString().toIntOrNull() ?: 0
+                      if (rpm != 0 && rpm !in 250..3000) {
+                          toast("Rumble RPM: 250 - 3000, atau 0 untuk OFF"); return@setOnClickListener
                       }
-                      val rpm  = etStartRpm.text.toString().toIntOrNull() ?: 1500
-                      val skip = etSkip.text.toString().toIntOrNull()?.coerceIn(2, 8) ?: 3
-                      if (rpm !in 250..3000) { toast("Start RPM: 250-3000"); return@setOnClickListener }
+                      val skip = getSkipFromTable()
+                      if (skip !in 2..8) { toast("Skip: 2 - 8"); return@setOnClickListener }
                       MainActivity.config.rumbleRpm  = rpm
                       MainActivity.config.rumbleSkip = skip
                       val act = activity as? MainActivity
                       act?.sendCmd("RBL:$rpm\r\n")
                       act?.sendCmd("RSK:$skip\r\n")
-                      toast("Rumble Idle tersimpan")
+                      toast("Rumble tersimpan")
                   }
+                  // ── Tarik Data EEPROM ──────────────────────────
+                  view.findViewById<TextView>(R.id.btnPullData).setOnClickListener {
+                      if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
+                      (activity as? MainActivity)?.sendCmd("GET\r\n")
+                      toast("Menarik data EEPROM...")
+                  }
+                  // ── Simpan Semua ke EEPROM ─────────────────────
+                  view.findViewById<TextView>(R.id.btnSaveAll).setOnClickListener {
+                      if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
+                      val cfg = MainActivity.config
+                      val act = activity as? MainActivity
+                      act?.sendCmd(cfg.buildMapCmd("M1", cfg.map1))
+                      Thread.sleep(80)
+                      act?.sendCmd(cfg.buildMapCmd("M2", cfg.map2))
+                      Thread.sleep(80)
+                      act?.sendCmd(cfg.buildMapCmd("M3", cfg.map3))
+                      Thread.sleep(80)
+                      act?.sendCmd("LIM:${cfg.rpmLimiter}\r\n")
+                      Thread.sleep(40)
+                      act?.sendCmd("ANG:${cfg.pulserAngle}\r\n")
+                      Thread.sleep(40)
+                      act?.sendCmd("SCR:${cfg.scrPulse}\r\n")
+                      Thread.sleep(40)
+                      act?.sendCmd("EDG:${cfg.edge}\r\n")
+                      Thread.sleep(40)
+                      act?.sendCmd("RBL:${cfg.rumbleRpm}\r\n")
+                      Thread.sleep(40)
+                      act?.sendCmd("RSK:${cfg.rumbleSkip}\r\n")
+                      toast("Semua data tersimpan ke EEPROM!")
+                  }
+                  // ── Ganti Background ───────────────────────────
+                  view.findViewById<TextView>(R.id.btnChangeBg).setOnClickListener {
+                      (activity as? MainActivity)?.changeBg()
+                  }
+
+                  // Refresh hanya saat GET response diterima
+                  MainActivity.registerCallback("setting") { _, isCfg ->
+                      if (isCfg) activity?.runOnUiThread { loadConfig() }
+                  }
+              }
+
+              private fun loadConfig() {
+                  val cfg = MainActivity.config
+                  etLimiter.setText(cfg.rpmLimiter.toString())
+                  etAngle.setText(cfg.pulserAngle.toString())
+                  etScr.setText(CdiConfig.tickToUs(cfg.scrPulse).toString())
+                  spEdge.setSelection(cfg.edge.coerceIn(0, 1))
+                  etRumbleRpm.setText(cfg.rumbleRpm.toString())
+                  buildRumbleTable(cfg.rumbleSkip)
+              }
+
+              // ── Tabel Rumble ───────────────────────────────────
+              // Tabel visual: setiap baris = 1 siklus spark (api)
+              // User bisa set mana yang skip (gelap) dan mana yang nyala
+              private val skipEts = arrayOfNulls<CheckBox>(8)
+
+              private fun buildRumbleTable(currentSkip: Int) {
+                  rumbleTable.removeAllViews()
+                  // Header
+                  val hRow = LinearLayout(requireContext()).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setBackgroundColor(Color.parseColor("#0A1828"))
+                      setPadding(0, 4, 0, 4)
+                  }
+                  hRow.addView(makeLbl("Spark ke", bold = true, w = 120))
+                  hRow.addView(makeLbl("Nyala", bold = true, w = 100))
+                  hRow.addView(makeLbl("Keterangan", bold = true, w = 0, weight = 1f))
+                  rumbleTable.addView(hRow)
+
+                  // Skip interval input
+                  val skipRow = LinearLayout(requireContext()).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(8, 8, 8, 8)
+                      setBackgroundColor(Color.parseColor("#0D1C2C"))
+                  }
+                  skipRow.addView(makeLbl("Skip setiap", bold = false, w = 160))
+                  val etSkip = EditText(requireContext()).apply {
+                      layoutParams = LinearLayout.LayoutParams(120, 56)
+                      inputType = android.text.InputType.TYPE_CLASS_NUMBER
+                      gravity = Gravity.CENTER
+                      textSize = 16f
+                      setTypeface(typeface, Typeface.BOLD)
+                      setText(currentSkip.toString())
+                      setTextColor(Color.parseColor("#00E5FF"))
+                      setBackgroundColor(Color.parseColor("#101F30"))
+                      id = R.id.etSkipVal
+                  }
+                  skipRow.addView(etSkip)
+                  skipRow.addView(makeLbl("  spark (2-8)", bold = false, w = 0, weight = 1f))
+                  rumbleTable.addView(skipRow)
+
+                  // Tabel visual spark
+                  val previewRow = LinearLayout(requireContext()).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(8, 12, 8, 4)
+                  }
+                  val previewLabel = makeLbl("Preview skip=$currentSkip:", bold = false, w = 0, weight = 1f)
+                  previewRow.addView(previewLabel)
+                  rumbleTable.addView(previewRow)
+
+                  val sparksRow = LinearLayout(requireContext()).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(8, 0, 8, 12)
+                  }
+                  // Gambar visual 8 spark
+                  for (i in 1..8) {
+                      val willSkip = (i % currentSkip == 0)
+                      val cell = TextView(requireContext()).apply {
+                          layoutParams = LinearLayout.LayoutParams(64, 64).also { it.marginEnd = 4 }
+                          text = "$i"
+                          gravity = Gravity.CENTER
+                          textSize = 14f
+                          setTypeface(typeface, Typeface.BOLD)
+                          setTextColor(if (willSkip) Color.parseColor("#FF5544") else Color.WHITE)
+                          setBackgroundColor(if (willSkip) Color.parseColor("#3A1010") else Color.parseColor("#0A3A2A"))
+                      }
+                      sparksRow.addView(cell)
+                  }
+                  rumbleTable.addView(sparksRow)
+
+                  // Keterangan
+                  val infoRow = LinearLayout(requireContext()).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(8, 4, 8, 8)
+                  }
+                  infoRow.addView(makeLbl(
+                      "■ Hijau = api nyala  ■ Merah = api diskip\nSkip $currentSkip = setiap $currentSkip spark, 1 diskip",
+                      bold = false, w = 0, weight = 1f
+                  ).apply { setTextColor(Color.parseColor("#778899")) })
+                  rumbleTable.addView(infoRow)
+              }
+
+              private fun getSkipFromTable(): Int {
+                  val et = view?.findViewById<EditText>(R.id.etSkipVal)
+                  return et?.text.toString().toIntOrNull() ?: MainActivity.config.rumbleSkip
+              }
+
+              private fun makeLbl(text: String, bold: Boolean, w: Int, weight: Float = 0f): TextView {
+                  return TextView(requireContext()).apply {
+                      this.text = text
+                      layoutParams = if (weight > 0f)
+                          LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, weight)
+                      else
+                          LinearLayout.LayoutParams(w, LinearLayout.LayoutParams.WRAP_CONTENT)
+                      gravity = Gravity.CENTER_VERTICAL
+                      textSize = 13f
+                      setTextColor(Color.parseColor("#AABBCC"))
+                      if (bold) setTypeface(typeface, Typeface.BOLD)
+                      setPadding(8, 4, 8, 4)
+                  }
+              }
+
+              private fun sendAndSave(cmd: String, msg: String) {
+                  if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return }
+                  (activity as? MainActivity)?.sendCmd(cmd)
+                  toast("$msg → tersimpan EEPROM")
               }
 
               private fun toast(msg: String) = Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-              override fun onDestroyView() { super.onDestroyView() }
-          }
 
-          // ── Beat Grid View (visual tap grid) ──────────────────
-          class BeatGridView(context: android.content.Context, attrs: android.util.AttributeSet? = null) : View(context, attrs) {
-              private val cols  = 4
-              private val rows  = 7
-              private val total = cols * rows
-              private val active = BooleanArray(total) { it % 3 != 0 }
-              private val paintOn  = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#00D4FF"); style = Paint.Style.FILL }
-              private val paintOff = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#0D1E2E"); style = Paint.Style.FILL }
-              private val paintNum = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.parseColor("#336677"); textAlign = Paint.Align.RIGHT; textSize = 24f }
-
-              init {
-                  setOnTouchListener { _, ev ->
-                      if (ev.action == android.view.MotionEvent.ACTION_DOWN) {
-                          val cw = width.toFloat() / cols
-                          val ch = height.toFloat() / rows
-                          val col = (ev.x / cw).toInt().coerceIn(0, cols - 1)
-                          val row = (ev.y / ch).toInt().coerceIn(0, rows - 1)
-                          val idx = row * cols + col
-                          if (idx < total) { active[idx] = !active[idx]; invalidate() }
-                      }
-                      true
-                  }
-              }
-
-              override fun onDraw(canvas: Canvas) {
-                  val cw = width.toFloat() / cols
-                  val ch = height.toFloat() / rows
-                  for (i in 0 until total) {
-                      val col = i % cols; val row = i / cols
-                      val left = col * cw + 4f; val top = row * ch + 4f
-                      val right = left + cw - 8f; val bot = top + ch - 8f
-                      val p = if (active[i]) paintOn else paintOff
-                      canvas.drawRoundRect(left, top, right, bot, 12f, 12f, p)
-                      paintNum.textSize = ch * 0.35f
-                      canvas.drawText("${i+1}", right - 4f, bot - 4f, paintNum)
-                  }
-              }
-
-              override fun onMeasure(w: Int, h: Int) {
-                  val width = MeasureSpec.getSize(w)
-                  setMeasuredDimension(width, (width * 1.5f).toInt())
+              override fun onDestroyView() {
+                  super.onDestroyView()
+                  MainActivity.unregisterCallback("setting")
               }
           }
           """)
 
-          print("All Kotlin files written!")
+          print("Kotlin OK!")
           PYEOF
 
-      - name: Write XML layout and resources
+      - name: Write XML layouts and resources
         run: |
           python3 - << 'PYEOF'
           import os, struct, zlib, math
@@ -816,216 +978,319 @@ jobs:
           RES = "NtechCDI/app/src/main/res"
           B   = "NtechCDI"
 
-          # activity_main.xml
-          w(RES + "/layout/activity_main.xml", """<?xml version="1.0" encoding="utf-8"?>
+          # ── activity_main.xml ─────────────────────────────
+          w(RES+"/layout/activity_main.xml", """<?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent"
-              android:orientation="vertical" android:background="#080F18">
+              android:orientation="vertical" android:background="#060D18">
               <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                  android:background="#0D1925" android:orientation="horizontal" android:padding="10dp" android:gravity="center_vertical">
-                  <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
-                      <TextView android:id="@+id/tvStatus" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Tidak Terhubung" android:textColor="#FF5252" android:textSize="13sp" android:textStyle="bold"/>
-                      <TextView android:id="@+id/tvInfo" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="" android:textColor="#888888" android:textSize="11sp"/>
+                  android:background="#0A1422" android:orientation="horizontal"
+                  android:padding="10dp" android:gravity="center_vertical">
+                  <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                      android:layout_weight="1" android:orientation="vertical">
+                      <TextView android:id="@+id/tvStatus" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Tidak Terhubung"
+                          android:textColor="#FF5252" android:textSize="13sp" android:textStyle="bold"/>
+                      <TextView android:id="@+id/tvDevice" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text=""
+                          android:textColor="#667788" android:textSize="11sp"/>
                   </LinearLayout>
-                  <TextView android:id="@+id/btnConnect" android:layout_width="wrap_content" android:layout_height="36dp"
-                      android:text="Hubungkan" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold"
-                      android:background="@drawable/btn_teal" android:paddingLeft="16dp" android:paddingRight="16dp" android:gravity="center"/>
+                  <TextView android:id="@+id/btnConnect" android:layout_width="wrap_content"
+                      android:layout_height="38dp" android:text="Hubungkan BT"
+                      android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold"
+                      android:background="@drawable/btn_cyan" android:paddingLeft="14dp"
+                      android:paddingRight="14dp" android:gravity="center"/>
               </LinearLayout>
-              <FrameLayout android:id="@+id/fragContainer" android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"/>
-              <LinearLayout android:layout_width="match_parent" android:layout_height="56dp" android:background="#0D1925" android:orientation="horizontal">
-                  <TextView android:id="@+id/navMonitor" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-                      android:text="Monitoring" android:textColor="#00BFA5" android:textSize="11sp" android:textStyle="bold" android:gravity="center"/>
-                  <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#1E3050"/>
-                  <TextView android:id="@+id/navMap" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-                      android:text="Setting Map" android:textColor="#FFFFFF" android:textSize="11sp" android:gravity="center"/>
-                  <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#1E3050"/>
-                  <TextView android:id="@+id/navConfig" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-                      android:text="CDI Config" android:textColor="#FFFFFF" android:textSize="11sp" android:gravity="center"/>
-                  <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#1E3050"/>
-                  <TextView android:id="@+id/navRumble" android:layout_width="0dp" android:layout_height="match_parent" android:layout_weight="1"
-                      android:text="Rumble Idle" android:textColor="#FFFFFF" android:textSize="11sp" android:gravity="center"/>
+              <FrameLayout android:id="@+id/fragContainer" android:layout_width="match_parent"
+                  android:layout_height="0dp" android:layout_weight="1"/>
+              <LinearLayout android:layout_width="match_parent" android:layout_height="56dp"
+                  android:background="#0A1422" android:orientation="horizontal">
+                  <TextView android:id="@+id/nav0" android:layout_width="0dp"
+                      android:layout_height="match_parent" android:layout_weight="1"
+                      android:text="Monitor" android:textColor="#00E5FF"
+                      android:textSize="12sp" android:textStyle="bold" android:gravity="center"/>
+                  <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#1A2840"/>
+                  <TextView android:id="@+id/nav1" android:layout_width="0dp"
+                      android:layout_height="match_parent" android:layout_weight="1"
+                      android:text="Kurva Map" android:textColor="#8899AA"
+                      android:textSize="12sp" android:gravity="center"/>
+                  <View android:layout_width="1dp" android:layout_height="match_parent" android:background="#1A2840"/>
+                  <TextView android:id="@+id/nav2" android:layout_width="0dp"
+                      android:layout_height="match_parent" android:layout_weight="1"
+                      android:text="Setting" android:textColor="#8899AA"
+                      android:textSize="12sp" android:gravity="center"/>
               </LinearLayout>
           </LinearLayout>""")
 
-          # fragment_monitor.xml
-          w(RES + "/layout/fragment_monitor.xml", """<?xml version="1.0" encoding="utf-8"?>
+          # ── fragment_monitor.xml ──────────────────────────
+          w(RES+"/layout/fragment_monitor.xml", """<?xml version="1.0" encoding="utf-8"?>
           <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent" android:layout_height="match_parent" android:background="#080F18">
-              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp">
+              android:layout_width="match_parent" android:layout_height="match_parent"
+              android:background="#060D18">
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                  android:orientation="vertical" android:padding="10dp">
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                      android:background="@drawable/card_dark" android:orientation="horizontal" android:padding="12dp" android:layout_marginBottom="8dp">
-                      <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
-                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="FIRMWARE" android:textColor="#888888" android:textSize="10sp"/>
-                          <TextView android:id="@+id/tvFirmware" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                              android:text="V5.7F" android:textColor="#00BFA5" android:textSize="14sp" android:textStyle="bold"/>
-                      </LinearLayout>
-                      <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:gravity="center">
-                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SERIAL NUM" android:textColor="#888888" android:textSize="10sp"/>
-                          <TextView android:id="@+id/tvSerial" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                              android:text="CDI-5TF" android:textColor="#00BFA5" android:textSize="14sp" android:textStyle="bold"/>
-                      </LinearLayout>
-                      <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:gravity="end">
-                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ACTIVE MAP" android:textColor="#888888" android:textSize="10sp"/>
-                          <TextView android:id="@+id/tvActiveMap" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                              android:text="Map 1" android:textColor="#FF9800" android:textSize="14sp" android:textStyle="bold"/>
-                      </LinearLayout>
-                  </LinearLayout>
-                  <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                      android:background="@drawable/card_dark" android:orientation="vertical" android:padding="12dp" android:layout_marginBottom="8dp">
+                      android:background="@drawable/card" android:orientation="vertical"
+                      android:padding="14dp" android:layout_marginBottom="8dp">
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Real-Time RPM" android:textColor="#00BFA5" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="8dp"/>
-                      <com.ntech.cdi.ui.GaugeView android:id="@+id/gaugeView" android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center" android:layout_marginTop="8dp">
-                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:gravity="center">
-                              <TextView android:id="@+id/tvAdv" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                                  android:text="0.0°" android:textColor="#00D4FF" android:textSize="32sp" android:textStyle="bold"/>
-                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="IGN ADV" android:textColor="#888888" android:textSize="12sp"/>
+                          android:text="RPM REAL-TIME" android:textColor="#00E5FF"
+                          android:textSize="13sp" android:textStyle="bold" android:layout_marginBottom="6dp"/>
+                      <com.ntech.cdi.ui.GaugeView android:id="@+id/gauge"
+                          android:layout_width="match_parent" android:layout_height="wrap_content"/>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                          android:orientation="horizontal" android:gravity="center" android:layout_marginTop="10dp">
+                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical" android:gravity="center">
+                              <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content"
+                                  android:layout_height="wrap_content" android:text="0"
+                                  android:textColor="#00FF88" android:textSize="60sp" android:textStyle="bold"/>
+                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                  android:text="RPM" android:textColor="#557788" android:textSize="13sp"/>
                           </LinearLayout>
-                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:gravity="center">
-                              <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                                  android:text="0" android:textColor="#FFFFFF" android:textSize="32sp" android:textStyle="bold"/>
-                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="RPM" android:textColor="#888888" android:textSize="12sp"/>
+                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content"
+                              android:layout_weight="1" android:orientation="vertical" android:gravity="center">
+                              <TextView android:id="@+id/tvAdv" android:layout_width="wrap_content"
+                                  android:layout_height="wrap_content" android:text="0°"
+                                  android:textColor="#00E5FF" android:textSize="42sp" android:textStyle="bold"/>
+                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                  android:text="ADVANCE" android:textColor="#557788" android:textSize="13sp"/>
                           </LinearLayout>
                       </LinearLayout>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                          android:orientation="horizontal" android:layout_marginTop="6dp">
+                          <TextView android:id="@+id/tvMaxRpm" android:layout_width="0dp"
+                              android:layout_height="wrap_content" android:layout_weight="1"
+                              android:text="Max: 0" android:textColor="#557788" android:textSize="12sp"/>
+                          <TextView android:id="@+id/btnResetMax" android:layout_width="wrap_content"
+                              android:layout_height="30dp" android:text="Reset Max"
+                              android:textColor="#00E5FF" android:textSize="11sp"
+                              android:background="@drawable/btn_outline" android:paddingLeft="10dp"
+                              android:paddingRight="10dp" android:gravity="center"/>
+                      </LinearLayout>
                   </LinearLayout>
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                      android:background="@drawable/card_dark" android:orientation="vertical" android:padding="12dp">
+                      android:background="@drawable/card" android:orientation="vertical"
+                      android:padding="14dp" android:layout_marginBottom="8dp">
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="RPM Curve" android:textColor="#00BFA5" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="8dp"/>
-                      <com.ntech.cdi.ui.RpmChartView android:id="@+id/chartView" android:layout_width="match_parent" android:layout_height="160dp"/>
+                          android:text="STATUS CDI" android:textColor="#00E5FF"
+                          android:textSize="13sp" android:textStyle="bold" android:layout_marginBottom="10dp"/>
+                      <TextView android:id="@+id/tvMap" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Map Aktif: -"
+                          android:textColor="#FFAA00" android:textSize="14sp" android:textStyle="bold"
+                          android:layout_marginBottom="6dp"/>
+                      <TextView android:id="@+id/tvEdge" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Edge: -"
+                          android:textColor="#BB88FF" android:textSize="13sp" android:layout_marginBottom="6dp"/>
+                      <TextView android:id="@+id/tvRumble" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Rumble: -"
+                          android:textColor="#88CCFF" android:textSize="13sp" android:layout_marginBottom="6dp"/>
+                      <TextView android:id="@+id/tvLimiter" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Limiter: -"
+                          android:textColor="#FF8844" android:textSize="13sp" android:layout_marginBottom="4dp"/>
+                      <TextView android:id="@+id/tvAngle" android:layout_width="wrap_content"
+                          android:layout_height="wrap_content" android:text="Pulser Angle: -"
+                          android:textColor="#44DDAA" android:textSize="13sp"/>
                   </LinearLayout>
+                  <TextView android:id="@+id/btnPullData" android:layout_width="match_parent"
+                      android:layout_height="48dp" android:text="⬇  Tarik Data EEPROM dari CDI"
+                      android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"
+                      android:background="@drawable/btn_cyan" android:gravity="center"/>
               </LinearLayout>
           </ScrollView>""")
 
-          # fragment_map.xml
-          w(RES + "/layout/fragment_map.xml", """<?xml version="1.0" encoding="utf-8"?>
+          # ── fragment_kurva.xml ────────────────────────────
+          w(RES+"/layout/fragment_kurva.xml", """<?xml version="1.0" encoding="utf-8"?>
           <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent"
-              android:orientation="vertical" android:background="#080F18">
+              android:orientation="vertical" android:background="#060D18">
               <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                  android:background="#0D1925" android:orientation="horizontal" android:padding="10dp" android:gravity="center_vertical">
-                  <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                      android:text="Map Aktif: " android:textColor="#888888" android:textSize="13sp" android:layout_marginRight="8dp"/>
-                  <Spinner android:id="@+id/spMap" android:layout_width="0dp" android:layout_height="40dp" android:layout_weight="1"
-                      android:background="@drawable/input_bg" android:paddingLeft="8dp"/>
-                  <TextView android:id="@+id/tvMapTitle" android:layout_width="wrap_content" android:layout_height="wrap_content" android:text=""/>
+                  android:background="#0A1422" android:orientation="horizontal" android:padding="6dp">
+                  <TextView android:id="@+id/tabM1" android:layout_width="0dp"
+                      android:layout_height="40dp" android:layout_weight="1"
+                      android:text="Map 1" android:textColor="#00E5FF"
+                      android:textSize="13sp" android:textStyle="bold" android:gravity="center"
+                      android:background="@drawable/tab_active" android:layout_marginRight="4dp"/>
+                  <TextView android:id="@+id/tabM2" android:layout_width="0dp"
+                      android:layout_height="40dp" android:layout_weight="1"
+                      android:text="Map 2" android:textColor="#334455"
+                      android:textSize="13sp" android:gravity="center"
+                      android:background="@drawable/tab_inactive" android:layout_marginRight="4dp"/>
+                  <TextView android:id="@+id/tabM3" android:layout_width="0dp"
+                      android:layout_height="40dp" android:layout_weight="1"
+                      android:text="Map 3" android:textColor="#334455"
+                      android:textSize="13sp" android:gravity="center"
+                      android:background="@drawable/tab_inactive"/>
               </LinearLayout>
               <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                  android:background="@drawable/card_dark" android:orientation="vertical" android:padding="8dp" android:layout_margin="8dp">
-                  <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                      android:text="Quad Ignition Map" android:textColor="#00BFA5" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="4dp"/>
-                  <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                      android:text="Atur advance (derajat) per step RPM. Maksimum 45. Geser tabel ke kanan untuk melihat RPM tinggi."
-                      android:textColor="#888888" android:textSize="11sp" android:layout_marginBottom="8dp"/>
-                  <com.ntech.cdi.ui.IgnMapChartView android:id="@+id/ignChart" android:layout_width="match_parent" android:layout_height="180dp"/>
+                  android:background="#0A1422" android:orientation="horizontal" android:paddingBottom="6dp">
+                  <TextView android:id="@+id/tvMapLabel" android:layout_width="0dp"
+                      android:layout_height="wrap_content" android:layout_weight="1"
+                      android:text="Map 1 — Harian" android:textColor="#FFAA00"
+                      android:textSize="13sp" android:textStyle="bold" android:paddingLeft="10dp"
+                      android:gravity="center_vertical"/>
               </LinearLayout>
-              <HorizontalScrollView android:layout_width="match_parent" android:layout_height="0dp" android:layout_weight="1"
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                  android:background="@drawable/card" android:orientation="vertical"
+                  android:padding="8dp" android:layout_margin="8dp">
+                  <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                      android:text="Kurva Advance (derajat) vs RPM" android:textColor="#00E5FF"
+                      android:textSize="12sp" android:textStyle="bold" android:layout_marginBottom="4dp"/>
+                  <com.ntech.cdi.ui.MapChartView android:id="@+id/mapChart"
+                      android:layout_width="match_parent" android:layout_height="wrap_content"/>
+              </LinearLayout>
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                  android:orientation="horizontal" android:padding="8dp">
+                  <TextView android:id="@+id/btnPullData" android:layout_width="0dp"
+                      android:layout_height="42dp" android:layout_weight="1"
+                      android:text="⬇ Tarik EEPROM" android:textColor="#FFFFFF"
+                      android:textSize="12sp" android:background="@drawable/btn_outline"
+                      android:gravity="center" android:layout_marginRight="4dp"/>
+                  <TextView android:id="@+id/btnSendMap" android:layout_width="0dp"
+                      android:layout_height="42dp" android:layout_weight="1"
+                      android:text="⬆ Kirim Map Aktif" android:textColor="#FFFFFF"
+                      android:textSize="12sp" android:background="@drawable/btn_cyan"
+                      android:gravity="center" android:layout_marginRight="4dp"/>
+                  <TextView android:id="@+id/btnSendAll" android:layout_width="0dp"
+                      android:layout_height="42dp" android:layout_weight="1"
+                      android:text="⬆ Simpan Semua" android:textColor="#FFFFFF"
+                      android:textSize="12sp" android:background="@drawable/btn_green"
+                      android:gravity="center"/>
+              </LinearLayout>
+              <HorizontalScrollView android:layout_width="match_parent"
+                  android:layout_height="0dp" android:layout_weight="1"
                   android:layout_marginLeft="8dp" android:layout_marginRight="8dp">
-                  <LinearLayout android:id="@+id/tableContainer" android:layout_width="wrap_content"
-                      android:layout_height="wrap_content" android:orientation="vertical"/>
+                  <LinearLayout android:id="@+id/tableLayout"
+                      android:layout_width="wrap_content" android:layout_height="wrap_content"
+                      android:orientation="vertical"/>
               </HorizontalScrollView>
-              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                  android:orientation="horizontal" android:padding="8dp" android:background="#0D1925">
-                  <TextView android:id="@+id/btnSave" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1"
-                      android:text="Simpan Map Aktif" android:textColor="#FFFFFF" android:textSize="13sp" android:textStyle="bold"
-                      android:background="@drawable/btn_teal" android:gravity="center" android:layout_marginRight="6dp"/>
-                  <TextView android:id="@+id/btnSaveAll" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1"
-                      android:text="Simpan Semua" android:textColor="#FFFFFF" android:textSize="13sp" android:textStyle="bold"
-                      android:background="@drawable/btn_outline_teal" android:gravity="center"/>
-              </LinearLayout>
           </LinearLayout>""")
 
-          # fragment_config.xml
-          w(RES + "/layout/fragment_config.xml", """<?xml version="1.0" encoding="utf-8"?>
+          # ── fragment_setting.xml ──────────────────────────
+          w(RES+"/layout/fragment_setting.xml", """<?xml version="1.0" encoding="utf-8"?>
           <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent" android:layout_height="match_parent" android:background="#080F18">
-              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp">
+              android:layout_width="match_parent" android:layout_height="match_parent"
+              android:background="#060D18">
+              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                  android:orientation="vertical" android:padding="10dp">
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                      android:background="@drawable/card_dark" android:orientation="vertical" android:padding="16dp" android:layout_marginBottom="10dp">
+                      android:background="@drawable/card" android:orientation="vertical"
+                      android:padding="14dp" android:layout_marginBottom="10dp">
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="General Settings" android:textColor="#00BFA5" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="16dp"/>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Logic Trigger" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="4dp"/>
-                      <Spinner android:id="@+id/spEdge" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginBottom="12dp"/>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Pulser Angle (derajat)" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="4dp"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
-                          <EditText android:id="@+id/etAngle" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
-                              android:inputType="number" android:textColor="#00BFA5" android:textSize="18sp" android:textStyle="bold"
-                              android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginRight="8dp"/>
-                          <TextView android:id="@+id/btnSendAngle" android:layout_width="80dp" android:layout_height="48dp"
-                              android:text="Kirim" android:textColor="#FFFFFF" android:textSize="12sp" android:background="@drawable/btn_teal" android:gravity="center"/>
+                          android:text="KONFIGURASI CDI" android:textColor="#00E5FF"
+                          android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="14dp"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Edge Trigger" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                      <Spinner android:id="@+id/spEdge" android:layout_width="match_parent"
+                          android:layout_height="48dp" android:background="@drawable/input_bg"
+                          android:paddingLeft="12dp" android:layout_marginBottom="12dp"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="RPM Limiter" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                          android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
+                          <EditText android:id="@+id/etLimiter" android:layout_width="0dp"
+                              android:layout_height="48dp" android:layout_weight="1"
+                              android:inputType="number" android:textColor="#00E5FF" android:textSize="18sp"
+                              android:textStyle="bold" android:background="@drawable/input_bg"
+                              android:paddingLeft="12dp" android:layout_marginRight="8dp"/>
+                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                              android:text="RPM" android:textColor="#557788" android:textSize="12sp" android:layout_marginRight="8dp"/>
+                          <TextView android:id="@+id/btnSendLim" android:layout_width="80dp"
+                              android:layout_height="48dp" android:text="Kirim"
+                              android:textColor="#FFFFFF" android:textSize="12sp"
+                              android:background="@drawable/btn_cyan" android:gravity="center"/>
                       </LinearLayout>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Rev Limiter (RPM)" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="4dp"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
-                          <EditText android:id="@+id/etLim" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
-                              android:inputType="number" android:textColor="#00BFA5" android:textSize="18sp" android:textStyle="bold"
-                              android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginRight="8dp"/>
-                          <TextView android:id="@+id/btnSendLim" android:layout_width="80dp" android:layout_height="48dp"
-                              android:text="Kirim" android:textColor="#FFFFFF" android:textSize="12sp" android:background="@drawable/btn_teal" android:gravity="center"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Pulser Angle" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                          android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
+                          <EditText android:id="@+id/etAngle" android:layout_width="0dp"
+                              android:layout_height="48dp" android:layout_weight="1"
+                              android:inputType="number" android:textColor="#00E5FF" android:textSize="18sp"
+                              android:textStyle="bold" android:background="@drawable/input_bg"
+                              android:paddingLeft="12dp" android:layout_marginRight="8dp"/>
+                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                              android:text="°" android:textColor="#557788" android:textSize="16sp" android:layout_marginRight="8dp"/>
+                          <TextView android:id="@+id/btnSendAngle" android:layout_width="80dp"
+                              android:layout_height="48dp" android:text="Kirim"
+                              android:textColor="#FFFFFF" android:textSize="12sp"
+                              android:background="@drawable/btn_cyan" android:gravity="center"/>
                       </LinearLayout>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="SCR Pulse Width (us)" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="4dp"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="16dp" android:gravity="center_vertical">
-                          <EditText android:id="@+id/etScr" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
-                              android:inputType="number" android:textColor="#00BFA5" android:textSize="18sp" android:textStyle="bold"
-                              android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginRight="8dp"/>
-                          <TextView android:id="@+id/btnSendScr" android:layout_width="80dp" android:layout_height="48dp"
-                              android:text="Kirim" android:textColor="#FFFFFF" android:textSize="12sp" android:background="@drawable/btn_teal" android:gravity="center"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="SCR Pulse Width" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                          android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
+                          <EditText android:id="@+id/etScr" android:layout_width="0dp"
+                              android:layout_height="48dp" android:layout_weight="1"
+                              android:inputType="number" android:textColor="#00E5FF" android:textSize="18sp"
+                              android:textStyle="bold" android:background="@drawable/input_bg"
+                              android:paddingLeft="12dp" android:layout_marginRight="8dp"/>
+                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                              android:text="µs" android:textColor="#557788" android:textSize="14sp" android:layout_marginRight="8dp"/>
+                          <TextView android:id="@+id/btnSendScr" android:layout_width="80dp"
+                              android:layout_height="48dp" android:text="Kirim"
+                              android:textColor="#FFFFFF" android:textSize="12sp"
+                              android:background="@drawable/btn_cyan" android:gravity="center"/>
                       </LinearLayout>
-                      <TextView android:id="@+id/btnSendEdge" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:text="Kirim Edge Setting" android:textColor="#FFFFFF" android:textSize="13sp"
-                          android:background="@drawable/btn_teal" android:gravity="center" android:layout_marginBottom="8dp"/>
+                      <TextView android:id="@+id/btnSendEdge" android:layout_width="match_parent"
+                          android:layout_height="48dp" android:text="Kirim Edge Setting"
+                          android:textColor="#FFFFFF" android:textSize="13sp"
+                          android:background="@drawable/btn_cyan" android:gravity="center"/>
                   </LinearLayout>
-                  <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal">
-                      <TextView android:id="@+id/btnGet" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1"
-                          android:text="Baca Config CDI" android:textColor="#FFFFFF" android:textSize="12sp"
-                          android:background="@drawable/btn_outline_teal" android:gravity="center" android:layout_marginRight="6dp"/>
-                      <TextView android:id="@+id/btnChangeBg" android:layout_width="0dp" android:layout_height="44dp" android:layout_weight="1"
-                          android:text="Ganti Background" android:textColor="#FFFFFF" android:textSize="12sp"
-                          android:background="@drawable/btn_outline_teal" android:gravity="center"/>
-                  </LinearLayout>
-              </LinearLayout>
-          </ScrollView>""")
-
-          # fragment_rumble.xml
-          w(RES + "/layout/fragment_rumble.xml", """<?xml version="1.0" encoding="utf-8"?>
-          <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-              android:layout_width="match_parent" android:layout_height="match_parent" android:background="#080F18">
-              <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="vertical" android:padding="12dp">
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                      android:background="@drawable/card_dark" android:orientation="vertical" android:padding="16dp" android:layout_marginBottom="10dp">
+                      android:background="@drawable/card" android:orientation="vertical"
+                      android:padding="14dp" android:layout_marginBottom="10dp">
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Rumble Idle" android:textColor="#00BFA5" android:textSize="16sp" android:textStyle="bold" android:layout_marginBottom="16dp"/>
-                      <CheckBox android:id="@+id/cbEnable" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Enable Rumble Idle" android:textColor="#FFFFFF" android:textSize="14sp"
-                          android:buttonTint="#00BFA5" android:layout_marginBottom="16dp"/>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Start RPM" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="4dp"/>
-                      <EditText android:id="@+id/etStartRpm" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:inputType="number" android:textColor="#00BFA5" android:textSize="18sp" android:textStyle="bold"
-                          android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginBottom="12dp"/>
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="Skip setiap N spark (2-8)" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="4dp"/>
-                      <EditText android:id="@+id/etSkip" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:inputType="number" android:textColor="#00BFA5" android:textSize="18sp" android:textStyle="bold"
-                          android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginBottom="16dp"/>
+                          android:text="RUMBLE IDLE" android:textColor="#00E5FF"
+                          android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="10dp"/>
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Beat Pattern (Biru = Spark, Gelap = Skip)" android:textColor="#CCCCCC" android:textSize="13sp" android:layout_marginBottom="8dp"/>
-                      <com.ntech.cdi.ui.BeatGridView android:id="@+id/beatGrid" android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                      <TextView android:id="@+id/btnSendRumble" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:text="Simpan Rumble" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"
-                          android:background="@drawable/btn_teal" android:gravity="center" android:layout_marginTop="16dp"/>
+                          android:text="Aktif di bawah RPM (0 = OFF)" android:textColor="#AABBCC"
+                          android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                      <EditText android:id="@+id/etRumbleRpm" android:layout_width="match_parent"
+                          android:layout_height="48dp" android:inputType="number"
+                          android:textColor="#00E5FF" android:textSize="18sp" android:textStyle="bold"
+                          android:background="@drawable/input_bg" android:paddingLeft="12dp"
+                          android:layout_marginBottom="12dp"/>
+                      <LinearLayout android:id="@+id/rumbleTable" android:layout_width="match_parent"
+                          android:layout_height="wrap_content" android:orientation="vertical"
+                          android:layout_marginBottom="12dp"/>
+                      <TextView android:id="@+id/btnSendRumble" android:layout_width="match_parent"
+                          android:layout_height="48dp" android:text="Kirim Rumble Setting"
+                          android:textColor="#FFFFFF" android:textSize="13sp"
+                          android:background="@drawable/btn_cyan" android:gravity="center"/>
                   </LinearLayout>
+                  <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
+                      android:orientation="horizontal" android:layout_marginBottom="8dp">
+                      <TextView android:id="@+id/btnPullData" android:layout_width="0dp"
+                          android:layout_height="48dp" android:layout_weight="1"
+                          android:text="⬇ Tarik Data EEPROM" android:textColor="#FFFFFF"
+                          android:textSize="12sp" android:textStyle="bold"
+                          android:background="@drawable/btn_outline"
+                          android:gravity="center" android:layout_marginRight="6dp"/>
+                      <TextView android:id="@+id/btnSaveAll" android:layout_width="0dp"
+                          android:layout_height="48dp" android:layout_weight="1"
+                          android:text="💾 Simpan Semua ke EEPROM" android:textColor="#FFFFFF"
+                          android:textSize="12sp" android:textStyle="bold"
+                          android:background="@drawable/btn_green" android:gravity="center"/>
+                  </LinearLayout>
+                  <TextView android:id="@+id/btnChangeBg" android:layout_width="match_parent"
+                      android:layout_height="44dp" android:text="Ganti Background"
+                      android:textColor="#AABBCC" android:textSize="12sp"
+                      android:background="@drawable/btn_outline" android:gravity="center"/>
               </LinearLayout>
           </ScrollView>""")
 
           # values
-          w(RES + "/values/strings.xml",
-            '<?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">NTECH CDI Tuner</string></resources>')
-          w(RES + "/values/styles.xml",
-            '<?xml version="1.0" encoding="utf-8"?><resources><style name="AppTheme" parent="Theme.AppCompat.NoActionBar"><item name="android:windowBackground">#080F18</item><item name="colorPrimary">#00BFA5</item><item name="colorPrimaryDark">#0D1925</item><item name="colorAccent">#00BFA5</item></style></resources>')
+          w(RES+"/values/strings.xml",
+            '<?xml version="1.0" encoding="utf-8"?><resources><string name="app_name">NTECH CDI v5.7F</string></resources>')
+          w(RES+"/values/styles.xml",
+            '<?xml version="1.0" encoding="utf-8"?><resources><style name="AppTheme" parent="Theme.AppCompat.NoActionBar"><item name="android:windowBackground">#060D18</item><item name="colorPrimary">#00E5FF</item><item name="colorPrimaryDark">#0A1422</item><item name="colorAccent">#00E5FF</item></style></resources>')
 
-          # Manifest
-          w(B + "/app/src/main/AndroidManifest.xml", """<?xml version="1.0" encoding="utf-8"?>
+          # ── ids.xml ────────────────────────────────────────
+          w(RES+"/values/ids.xml",
+            '<?xml version="1.0" encoding="utf-8"?><resources><item name="etSkipVal" type="id"/></resources>')
+
+          # ── Manifest ──────────────────────────────────────
+          w(B+"/app/src/main/AndroidManifest.xml", """<?xml version="1.0" encoding="utf-8"?>
           <manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.ntech.cdi">
               <uses-permission android:name="android.permission.BLUETOOTH"/>
               <uses-permission android:name="android.permission.BLUETOOTH_ADMIN"/>
@@ -1038,19 +1303,23 @@ jobs:
                   android:label="@string/app_name" android:theme="@style/AppTheme">
                   <activity android:name=".MainActivity" android:exported="true"
                       android:screenOrientation="portrait" android:windowSoftInputMode="adjustResize">
-                      <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+                      <intent-filter><action android:name="android.intent.action.MAIN"/>
+                      <category android:name="android.intent.category.LAUNCHER"/></intent-filter>
                   </activity>
               </application>
           </manifest>""")
 
-          # Drawables
-          dr = RES + "/drawable"; os.makedirs(dr, exist_ok=True)
-          w(dr+"/btn_teal.xml",         '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#00897B"/><corners android:radius="8dp"/></shape>')
-          w(dr+"/btn_outline_teal.xml", '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><stroke android:width="1dp" android:color="#00BFA5"/><corners android:radius="8dp"/><solid android:color="#00000000"/></shape>')
-          w(dr+"/card_dark.xml",        '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#0D1925"/><corners android:radius="10dp"/></shape>')
-          w(dr+"/input_bg.xml",         '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle"><solid android:color="#0A1520"/><stroke android:width="1dp" android:color="#1E3050"/><corners android:radius="6dp"/></shape>')
+          # ── Drawables ──────────────────────────────────────
+          dr = RES+"/drawable"; os.makedirs(dr, exist_ok=True)
+          w(dr+"/btn_cyan.xml",    '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#006688"/><corners android:radius="8dp"/></shape>')
+          w(dr+"/btn_green.xml",   '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#005533"/><corners android:radius="8dp"/></shape>')
+          w(dr+"/btn_outline.xml", '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><stroke android:width="1dp" android:color="#00E5FF"/><corners android:radius="8dp"/><solid android:color="#00000000"/></shape>')
+          w(dr+"/card.xml",        '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#0A1828"/><corners android:radius="10dp"/></shape>')
+          w(dr+"/input_bg.xml",    '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#060D18"/><stroke android:width="1dp" android:color="#1A3050"/><corners android:radius="6dp"/></shape>')
+          w(dr+"/tab_active.xml",  '<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#0A2840"/><corners android:radius="6dp"/><stroke android:width="1dp" android:color="#00E5FF"/></shape>')
+          w(dr+"/tab_inactive.xml",'<?xml version="1.0" encoding="utf-8"?><shape xmlns:android="http://schemas.android.com/apk/res/android"><solid android:color="#0A1422"/><corners android:radius="6dp"/></shape>')
 
-          # Icons
+          # ── Icons ──────────────────────────────────────────
           def make_icon(sz):
               def ck(n,d): c=n+d; return struct.pack('>I',len(d))+c+struct.pack('>I',zlib.crc32(c)&0xffffffff)
               cx=cy=sz//2; r=sz//2-2; rows=[]
@@ -1058,46 +1327,35 @@ jobs:
                   row=b'\x00'
                   for x in range(sz):
                       dx,dy=x-cx,y-cy; dist=math.sqrt(dx*dx+dy*dy)
-                      if dist>r: row+=b'\x08\x0F\x18'
-                      elif dist>r-8: row+=b'\x00\xBF\xA5'
+                      if dist>r: row+=b'\x06\x0D\x18'
+                      elif dist>r-8: row+=b'\x00\xE5\xFF'
                       else:
                           ang=math.atan2(dy,dx); tooth=int((ang+math.pi)/(2*math.pi)*12)
-                          if dist>r-18 and tooth%2==0: row+=b'\x00\xBF\xA5'
-                          elif dist<r*0.4: row+=b'\x00\xBF\xA5'
-                          else: row+=b'\x0D\x19\x25'
+                          if dist>r-20 and tooth%2==0: row+=b'\x00\xE5\xFF'
+                          elif dist<r*0.35: row+=b'\x00\xFF\x88'
+                          else: row+=b'\x0A\x18\x28'
                   rows.append(row)
               return b'\x89PNG\r\n\x1a\n'+ck(b'IHDR',struct.pack('>IIBBBBB',sz,sz,8,2,0,0,0))+ck(b'IDAT',zlib.compress(b''.join(rows)))+ck(b'IEND',b'')
           for folder,sz in [('mipmap-mdpi',48),('mipmap-hdpi',72),('mipmap-xhdpi',96),('mipmap-xxhdpi',144),('mipmap-xxxhdpi',192)]:
               p=RES+"/"+folder; os.makedirs(p,exist_ok=True); png=make_icon(sz)
               open(p+"/ic_launcher.png",'wb').write(png); open(p+"/ic_launcher_round.png",'wb').write(png)
 
-          print("All XML + assets OK!")
+          print("All XML OK!")
           PYEOF
 
       - name: Write Gradle files
         run: |
           mkdir -p NtechCDI/app
-
           cat > NtechCDI/app/build.gradle << 'EOF'
-          plugins {
-              id 'com.android.application'
-              id 'kotlin-android'
-          }
+          plugins { id 'com.android.application'; id 'kotlin-android' }
           android {
-              compileSdk 34
-              namespace 'com.ntech.cdi'
+              compileSdk 34; namespace 'com.ntech.cdi'
               defaultConfig {
-                  applicationId "com.ntech.cdi"
-                  minSdk 26
-                  targetSdk 34
-                  versionCode 3
-                  versionName "3.0"
+                  applicationId "com.ntech.cdi"; minSdk 26; targetSdk 34
+                  versionCode 4; versionName "5.7F"
               }
               buildTypes { release { minifyEnabled false } }
-              compileOptions {
-                  sourceCompatibility JavaVersion.VERSION_17
-                  targetCompatibility JavaVersion.VERSION_17
-              }
+              compileOptions { sourceCompatibility JavaVersion.VERSION_17; targetCompatibility JavaVersion.VERSION_17 }
               kotlinOptions { jvmTarget = '17' }
           }
           dependencies {
@@ -1130,18 +1388,13 @@ jobs:
           EOF
 
       - name: Generate Gradle Wrapper
-        run: |
-          cd NtechCDI
-          gradle wrapper --gradle-version 8.2
-          chmod +x gradlew
+        run: cd NtechCDI && gradle wrapper --gradle-version 8.2 && chmod +x gradlew
 
       - name: Build APK
-        run: |
-          cd NtechCDI
-          ./gradlew assembleDebug --no-daemon
+        run: cd NtechCDI && ./gradlew assembleDebug --no-daemon
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: NTECH-CDI-Tuner-v3-APK
+          name: NTECH-CDI-v5.7F-APK
           path: NtechCDI/app/build/outputs/apk/debug/app-debug.apk
