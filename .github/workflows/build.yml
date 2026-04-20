@@ -41,25 +41,24 @@ jobs:
           UI  = PKG + "/ui"
 
           # ── CdiConfig.kt ──────────────────────────────────
-          # Disesuaikan persis dengan struct CDI_Config v5.7H
+          # Perubahan: pulserAngleX10 (×10), RON, ROF, RSP, RAS
           w(PKG + "/CdiConfig.kt", r"""package com.ntech.cdi
 
           class CdiConfig {
               val map1 = IntArray(32) { DEF_MAP1[it] }
               val map2 = IntArray(32) { DEF_MAP2[it] }
               val map3 = IntArray(32) { DEF_MAP3[it] }
-              var rpmLimiter   = 12000
-              var pulserAngle  = 63
-              var scrPulse     = 1000   // ticks (0.5µs/tick)
-              // Rumble v5.7H
-              var rumbleOnRpm  = 0      // aktif saat RPM < ini (0=OFF)
-              var rumbleOffRpm = 0      // mati saat RPM > ini
-              var rumbleSkip   = 4      // panjang siklus (2-8 spark)
-              var rumbleSpeed  = 1      // jumlah skip berturut (1..skip-1)
-              var rumbleActive = false  // status live dari CDI (RAS:)
-              var activeMap    = 1
-              var edge         = 0      // 0=falling, 1=rising
-              var lastRpm      = 0
+              var rpmLimiter      = 12000
+              var pulserAngleX10  = 630    // ×10 → 63,0°  | ANG:1115 = 111,5°
+              var scrPulse        = 1000   // ticks (0,5µs/tick)
+              var rumbleOnRpm     = 0      // aktif saat RPM < ini (0=OFF)
+              var rumbleOffRpm    = 0      // mati saat RPM > ini
+              var rumbleSkip      = 4      // panjang siklus total (2-8)
+              var rumbleSpeed     = 1      // skip berturut per siklus (1..skip-1)
+              var activeMap       = 1
+              var edge            = 0      // 0=falling, 1=rising
+              var lastRpm         = 0
+              var rumbleActive    = false  // status RAS dari CDI
 
               companion object {
                   val DEF_MAP1 = intArrayOf(5,8,15,20,24,28,30,32,34,34,34,34,34,34,34,34,34,34,34,34,34,32,30,27,23,19,17,15,15,15,10,10)
@@ -68,9 +67,16 @@ jobs:
                   val RPM_STEPS = intArrayOf(500,1000,1500,2000,2500,3000,3500,4000,4500,5000,
                       5500,6000,6500,7000,7500,8000,8500,9000,9500,10000,
                       10500,11000,11500,12000,12500,13000,13500,14000,14500,15000,15500,16000)
+                  // SCR: 1 tick = 0,5µs
                   fun tickToUs(tick: Int) = tick / 2
                   fun usToTick(us: Int)   = us * 2
-                  fun rpmLabel(i: Int)    = if (i < RPM_STEPS.size) "${RPM_STEPS[i]}" else "-"
+                  // Tampilkan angle dengan 1 desimal: 1115 → "111.5°"
+                  fun angleStr(x10: Int): String {
+                      val whole = x10 / 10
+                      val dec   = x10 % 10
+                      return if (dec == 0) "$whole°" else "$whole.$dec°"
+                  }
+                  fun rpmLabel(i: Int) = if (i < RPM_STEPS.size) "${RPM_STEPS[i]}" else "-"
               }
 
               fun mapArray(m: Int) = when (m) { 2 -> map2; 3 -> map3; else -> map1 }
@@ -82,21 +88,21 @@ jobs:
                   return activeMapArray()[idx]
               }
 
-              // Sesuai protokol v5.7H persis
+              // Kembalikan true = data config (dari GET), false = live/ack
               fun parseLine(line: String): Boolean {
                   return when {
                       line.startsWith("RPM:") -> { lastRpm = line.removePrefix("RPM:").toIntOrNull() ?: lastRpm; false }
                       line.startsWith("ACT:") -> { activeMap = line.removePrefix("ACT:").toIntOrNull() ?: activeMap; false }
                       line.startsWith("RAS:") -> { rumbleActive = (line.removePrefix("RAS:").toIntOrNull() ?: 0) == 1; false }
                       line == "OK" || line == "ERR" -> false
-                      line.startsWith("LIM:") -> { rpmLimiter  = line.removePrefix("LIM:").toIntOrNull() ?: rpmLimiter;  true }
-                      line.startsWith("ANG:") -> { pulserAngle = line.removePrefix("ANG:").toIntOrNull() ?: pulserAngle; true }
-                      line.startsWith("SCR:") -> { scrPulse    = line.removePrefix("SCR:").toIntOrNull() ?: scrPulse;    true }
-                      line.startsWith("RON:") -> { rumbleOnRpm  = line.removePrefix("RON:").toIntOrNull() ?: rumbleOnRpm;  true }
-                      line.startsWith("ROF:") -> { rumbleOffRpm = line.removePrefix("ROF:").toIntOrNull() ?: rumbleOffRpm; true }
-                      line.startsWith("RSK:") -> { rumbleSkip   = line.removePrefix("RSK:").toIntOrNull() ?: rumbleSkip;  true }
-                      line.startsWith("RSP:") -> { rumbleSpeed  = line.removePrefix("RSP:").toIntOrNull() ?: rumbleSpeed; true }
-                      line.startsWith("EDG:") -> { edge         = line.removePrefix("EDG:").toIntOrNull() ?: edge;        true }
+                      line.startsWith("LIM:") -> { rpmLimiter     = line.removePrefix("LIM:").toIntOrNull() ?: rpmLimiter;    true }
+                      line.startsWith("ANG:") -> { pulserAngleX10 = line.removePrefix("ANG:").toIntOrNull() ?: pulserAngleX10; true }
+                      line.startsWith("SCR:") -> { scrPulse       = line.removePrefix("SCR:").toIntOrNull() ?: scrPulse;      true }
+                      line.startsWith("RON:") -> { rumbleOnRpm    = line.removePrefix("RON:").toIntOrNull() ?: rumbleOnRpm;   true }
+                      line.startsWith("ROF:") -> { rumbleOffRpm   = line.removePrefix("ROF:").toIntOrNull() ?: rumbleOffRpm;  true }
+                      line.startsWith("RSK:") -> { rumbleSkip     = line.removePrefix("RSK:").toIntOrNull() ?: rumbleSkip;    true }
+                      line.startsWith("RSP:") -> { rumbleSpeed    = line.removePrefix("RSP:").toIntOrNull() ?: rumbleSpeed;   true }
+                      line.startsWith("EDG:") -> { edge           = line.removePrefix("EDG:").toIntOrNull() ?: edge;          true }
                       line.startsWith("M1:") -> {
                           line.removePrefix("M1:").split(",").forEachIndexed { i, v ->
                               if (i < 32) map1[i] = v.trim().toIntOrNull()?.coerceIn(0,60) ?: map1[i]
@@ -118,17 +124,6 @@ jobs:
 
               fun buildMapCmd(prefix: String, arr: IntArray) =
                   "$prefix:${arr.joinToString(",")}\r\n"
-
-              // Preview pola rumble: fire_count = skip - speed
-              fun rumblePatternPreview(): String {
-                  val fireCount = (rumbleSkip - rumbleSpeed).coerceAtLeast(1)
-                  val sb = StringBuilder()
-                  for (i in 1..rumbleSkip) {
-                      sb.append(if (i <= fireCount) "⚡" else "✗")
-                      if (i < rumbleSkip) sb.append(" ")
-                  }
-                  return sb.toString()
-              }
           }
           """)
 
@@ -218,8 +213,7 @@ jobs:
               fun changeBg() = pickBg.launch("image/*")
 
               fun showTab(t: Int) {
-                  if (t == currentTab) return
-                  currentTab = t
+                  if (t == currentTab) return; currentTab = t
                   val ft = supportFragmentManager.beginTransaction()
                   ft.hide(fragMonitor).hide(fragKurva).hide(fragSetting)
                   when (t) { 0 -> ft.show(fragMonitor); 1 -> ft.show(fragKurva); else -> ft.show(fragSetting) }
@@ -312,16 +306,23 @@ jobs:
           import android.view.*
           import android.widget.*
           import androidx.fragment.app.Fragment
+          import com.ntech.cdi.CdiConfig
           import com.ntech.cdi.MainActivity
           import com.ntech.cdi.R
           import kotlin.math.*
 
           class MonitorFragment : Fragment() {
-              private var tvRpm: TextView? = null; private var tvAdv: TextView? = null
-              private var tvEdge: TextView? = null; private var tvRumbleStatus: TextView? = null
-              private var tvMap: TextView? = null; private var tvLimiter: TextView? = null
-              private var tvAngle: TextView? = null; private var gauge: GaugeView? = null
-              private var tvMaxRpm: TextView? = null; private var tvRumbleDetail: TextView? = null
+              private var tvRpm: TextView? = null
+              private var tvAdv: TextView? = null
+              private var tvEdge: TextView? = null
+              private var tvRumbleStatus: TextView? = null
+              private var tvMap: TextView? = null
+              private var tvLimiter: TextView? = null
+              private var tvAngle: TextView? = null
+              private var tvRon: TextView? = null
+              private var tvRof: TextView? = null
+              private var gauge: GaugeView? = null
+              private var tvMaxRpm: TextView? = null
               private var maxRpm = 0
 
               override fun onCreateView(inf: LayoutInflater, c: ViewGroup?, s: Bundle?): View? =
@@ -332,17 +333,24 @@ jobs:
                   tvAdv          = view.findViewById(R.id.tvAdv)
                   tvEdge         = view.findViewById(R.id.tvEdge)
                   tvRumbleStatus = view.findViewById(R.id.tvRumbleStatus)
-                  tvRumbleDetail = view.findViewById(R.id.tvRumbleDetail)
                   tvMap          = view.findViewById(R.id.tvMap)
                   tvLimiter      = view.findViewById(R.id.tvLimiter)
                   tvAngle        = view.findViewById(R.id.tvAngle)
+                  tvRon          = view.findViewById(R.id.tvRon)
+                  tvRof          = view.findViewById(R.id.tvRof)
                   gauge          = view.findViewById(R.id.gauge)
                   tvMaxRpm       = view.findViewById(R.id.tvMaxRpm)
-                  view.findViewById<TextView>(R.id.btnResetMax).setOnClickListener { maxRpm=0; tvMaxRpm?.text="Max: 0 RPM" }
-                  view.findViewById<TextView>(R.id.btnPullData).setOnClickListener {
-                      if (MainActivity.isConnected) { (activity as? MainActivity)?.sendCmd("GET\r\n"); (activity as? MainActivity)?.toast("Menarik data EEPROM...") }
-                      else (activity as? MainActivity)?.toast("Tidak terhubung!")
+
+                  view.findViewById<TextView>(R.id.btnResetMax).setOnClickListener {
+                      maxRpm = 0; tvMaxRpm?.text = "Max: 0 RPM"
                   }
+                  view.findViewById<TextView>(R.id.btnPullData).setOnClickListener {
+                      if (MainActivity.isConnected) {
+                          (activity as? MainActivity)?.sendCmd("GET\r\n")
+                          (activity as? MainActivity)?.toast("Menarik data EEPROM...")
+                      } else (activity as? MainActivity)?.toast("Tidak terhubung!")
+                  }
+
                   updateUI()
                   MainActivity.registerCallback("monitor") { _, _ -> activity?.runOnUiThread { updateUI() } }
               }
@@ -351,27 +359,27 @@ jobs:
                   val cfg = MainActivity.config
                   val rpm = cfg.lastRpm
                   val adv = cfg.getAdvForRpm(rpm)
-                  if (rpm > maxRpm) { maxRpm=rpm; tvMaxRpm?.text="Max: $maxRpm RPM" }
-                  tvRpm?.text  = rpm.toString()
-                  tvAdv?.text  = "$adv°"
-                  tvEdge?.text = "Edge: ${if(cfg.edge==0)"FALLING ↓" else "RISING ↑"}"
+                  if (rpm > maxRpm) { maxRpm = rpm; tvMaxRpm?.text = "Max: $maxRpm RPM" }
 
-                  // Status rumble real-time dari CDI (RAS:)
-                  val ron = cfg.rumbleOnRpm; val rof = cfg.rumbleOffRpm
-                  if (ron == 0) {
-                      tvRumbleStatus?.text = "Rumble: OFF"
-                      tvRumbleStatus?.setTextColor(0xFF667788.toInt())
-                      tvRumbleDetail?.text = ""
-                  } else {
-                      val statusStr = if (cfg.rumbleActive) "Rumble: AKTIF ●" else "Rumble: standby ○"
-                      tvRumbleStatus?.text = statusStr
-                      tvRumbleStatus?.setTextColor(if (cfg.rumbleActive) 0xFF00FF88.toInt() else 0xFF88CCFF.toInt())
-                      tvRumbleDetail?.text = "ON < ${ron} RPM  |  OFF > ${rof} RPM  |  ${cfg.rumblePatternPreview()}"
+                  tvRpm?.text = rpm.toString()
+                  tvAdv?.text = "$adv°"
+                  tvEdge?.text = "Edge: ${if (cfg.edge == 0) "FALLING ↓" else "RISING ↑"}"
+
+                  // Rumble status — tampilkan apakah sedang aktif (dari RAS CDI)
+                  tvRumbleStatus?.text = when {
+                      cfg.rumbleOnRpm == 0 -> "Rumble: OFF"
+                      cfg.rumbleActive     -> "Rumble: AKTIF ⚡ (${cfg.rumbleSkip}sk/${cfg.rumbleSpeed}skip)"
+                      else                 -> "Rumble: Standby (ON<${cfg.rumbleOnRpm} OFF>${cfg.rumbleOffRpm})"
                   }
+                  tvRumbleStatus?.setTextColor(if (cfg.rumbleActive) 0xFF00FF88.toInt() else 0xFF88CCFF.toInt())
 
                   tvMap?.text     = "Aktif: ${when(cfg.activeMap){2->"Map 2 Touring";3->"Map 3 Racing";else->"Map 1 Harian"}}"
                   tvLimiter?.text = "Limiter: ${cfg.rpmLimiter} RPM"
-                  tvAngle?.text   = "Pulser: ${cfg.pulserAngle}°"
+                  // Tampilkan pulser angle dengan desimal
+                  tvAngle?.text   = "Pulser: ${CdiConfig.angleStr(cfg.pulserAngleX10)}"
+                  tvRon?.text     = "Rumble ON  < ${if(cfg.rumbleOnRpm==0)"OFF" else "${cfg.rumbleOnRpm} RPM"}"
+                  tvRof?.text     = "Rumble OFF > ${if(cfg.rumbleOffRpm==0)"—" else "${cfg.rumbleOffRpm} RPM"}"
+
                   gauge?.setRpm(rpm, cfg.rpmLimiter)
                   tvRpm?.setTextColor(when {
                       rpm >= cfg.rpmLimiter        -> 0xFFFF3333.toInt()
@@ -435,20 +443,23 @@ jobs:
               override fun onViewCreated(view: View, s: Bundle?) {
                   chart      = view.findViewById(R.id.mapChart)
                   tvMapLabel = view.findViewById(R.id.tvMapLabel)
+
                   view.findViewById<TextView>(R.id.tabM1).setOnClickListener { selectMap(view, 1) }
                   view.findViewById<TextView>(R.id.tabM2).setOnClickListener { selectMap(view, 2) }
                   view.findViewById<TextView>(R.id.tabM3).setOnClickListener { selectMap(view, 3) }
+
                   view.findViewById<TextView>(R.id.btnSendMap).setOnClickListener {
                       if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
-                      val cfg=MainActivity.config; val arr=cfg.mapArray(currentMap)
-                      val pfx=when(currentMap){2->"M2";3->"M3";else->"M1"}
-                      (activity as? MainActivity)?.sendCmd(cfg.buildMapCmd(pfx,arr))
+                      val cfg = MainActivity.config
+                      val arr = cfg.mapArray(currentMap)
+                      val pfx = when (currentMap) { 2->"M2"; 3->"M3"; else->"M1" }
+                      (activity as? MainActivity)?.sendCmd(cfg.buildMapCmd(pfx, arr))
                       (activity as? MainActivity)?.sendCmd("ACT:$currentMap\r\n")
                       toast("Map $currentMap terkirim & tersimpan EEPROM")
                   }
                   view.findViewById<TextView>(R.id.btnSendAll).setOnClickListener {
                       if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
-                      val cfg=MainActivity.config; val act=activity as? MainActivity
+                      val cfg = MainActivity.config; val act = activity as? MainActivity
                       act?.sendCmd(cfg.buildMapCmd("M1",cfg.map1)); Thread.sleep(80)
                       act?.sendCmd(cfg.buildMapCmd("M2",cfg.map2)); Thread.sleep(80)
                       act?.sendCmd(cfg.buildMapCmd("M3",cfg.map3)); Thread.sleep(80)
@@ -459,63 +470,71 @@ jobs:
                       if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
                       (activity as? MainActivity)?.sendCmd("GET\r\n"); toast("Menarik data EEPROM...")
                   }
-                  if (!tableBuilt) { buildTable(view); tableBuilt=true }
+
+                  if (!tableBuilt) { buildTable(view); tableBuilt = true }
                   selectMap(view, MainActivity.config.activeMap)
+
                   MainActivity.registerCallback("kurva") { _, isCfg ->
                       if (isCfg) activity?.runOnUiThread { refreshCells(); refreshChart() }
                   }
               }
 
               private fun buildTable(root: View) {
-                  val tbl=root.findViewById<LinearLayout>(R.id.tableLayout) ?: return
-                  tbl.removeAllViews()
-                  val cfg=MainActivity.config
-                  val hRow=LinearLayout(requireContext()).apply{orientation=LinearLayout.HORIZONTAL;setBackgroundColor(Color.parseColor("#0A1828"));setPadding(0,8,0,8)}
-                  hRow.addView(makeCell("RPM",140,Color.parseColor("#00E5FF"),bold=true,clickable=false,arr=null,rowIdx=-1,mapIdx=-1))
-                  hRow.addView(makeCell("Map1°",120,Color.parseColor("#00E5FF"),bold=true,clickable=false,arr=null,rowIdx=-1,mapIdx=-1))
-                  hRow.addView(makeCell("Map2°",120,Color.parseColor("#FFAA00"),bold=true,clickable=false,arr=null,rowIdx=-1,mapIdx=-1))
-                  hRow.addView(makeCell("Map3°",120,Color.parseColor("#FF5544"),bold=true,clickable=false,arr=null,rowIdx=-1,mapIdx=-1))
+                  val tbl = root.findViewById<LinearLayout>(R.id.tableLayout) ?: return
+                  tbl.removeAllViews(); val cfg = MainActivity.config
+                  val hRow = LinearLayout(requireContext()).apply {
+                      orientation=LinearLayout.HORIZONTAL; setBackgroundColor(Color.parseColor("#0A1828")); setPadding(0,8,0,8)
+                  }
+                  hRow.addView(makeCell("RPM",140,Color.parseColor("#00E5FF"),bold=true,clickable=false,arr=null,ri=-1,mi=-1))
+                  hRow.addView(makeCell("Map1°",120,Color.parseColor("#00E5FF"),bold=true,clickable=false,arr=null,ri=-1,mi=-1))
+                  hRow.addView(makeCell("Map2°",120,Color.parseColor("#FFAA00"),bold=true,clickable=false,arr=null,ri=-1,mi=-1))
+                  hRow.addView(makeCell("Map3°",120,Color.parseColor("#FF5544"),bold=true,clickable=false,arr=null,ri=-1,mi=-1))
                   tbl.addView(hRow)
                   for (i in 0 until 32) {
-                      val row=LinearLayout(requireContext()).apply{orientation=LinearLayout.HORIZONTAL;setBackgroundColor(if(i%2==0)Color.parseColor("#0C1A28") else Color.parseColor("#0F1E2E"))}
-                      val rpmColor=when{i<=5->Color.parseColor("#44FF88");i<=15->Color.parseColor("#FFCC00");else->Color.parseColor("#FF6644")}
-                      row.addView(makeCell(CdiConfig.rpmLabel(i),140,rpmColor,bold=true,clickable=false,arr=null,rowIdx=i,mapIdx=-1))
-                      for (mi in 0..2) {
-                          val arr=cfg.mapArray(mi+1)
-                          val tv=makeCell(arr[i].toString(),120,Color.WHITE,bold=true,clickable=true,arr=arr,rowIdx=i,mapIdx=mi)
-                          cells[mi][i]=tv; row.addView(tv)
+                      val row = LinearLayout(requireContext()).apply {
+                          orientation=LinearLayout.HORIZONTAL
+                          setBackgroundColor(if(i%2==0)Color.parseColor("#0C1A28") else Color.parseColor("#0F1E2E"))
+                      }
+                      val rc = when{i<=5->Color.parseColor("#44FF88");i<=15->Color.parseColor("#FFCC00");else->Color.parseColor("#FF6644")}
+                      row.addView(makeCell(CdiConfig.rpmLabel(i),140,rc,bold=true,clickable=false,arr=null,ri=i,mi=-1))
+                      for (m in 0..2) {
+                          val arr = cfg.mapArray(m+1)
+                          val tv  = makeCell(arr[i].toString(),120,Color.WHITE,bold=true,clickable=true,arr=arr,ri=i,mi=m)
+                          cells[m][i] = tv; row.addView(tv)
                       }
                       tbl.addView(row)
                   }
               }
 
-              private fun makeCell(text:String,width:Int,color:Int,bold:Boolean,clickable:Boolean,arr:IntArray?,rowIdx:Int,mapIdx:Int):TextView{
+              private fun makeCell(text:String,width:Int,color:Int,bold:Boolean,clickable:Boolean,arr:IntArray?,ri:Int,mi:Int):TextView{
                   return TextView(requireContext()).apply{
-                      this.text=text; layoutParams=LinearLayout.LayoutParams(width,68)
-                      gravity=Gravity.CENTER; textSize=15f
-                      if(bold) setTypeface(typeface,Typeface.BOLD)
-                      setTextColor(color); setPadding(4,0,4,0)
-                      if(clickable&&arr!=null&&rowIdx>=0){
+                      this.text=text; layoutParams=LinearLayout.LayoutParams(width,68); gravity=Gravity.CENTER; textSize=15f
+                      if(bold)setTypeface(typeface,Typeface.BOLD); setTextColor(color); setPadding(4,0,4,0)
+                      if(clickable&&arr!=null&&ri>=0){
                           setBackgroundColor(Color.parseColor("#10223A"))
                           setOnClickListener{
                               val input=android.widget.EditText(context).apply{
-                                  inputType=android.text.InputType.TYPE_CLASS_NUMBER
-                                  setText(arr[rowIdx].toString()); selectAll()
+                                  inputType=android.text.InputType.TYPE_CLASS_NUMBER; setText(arr[ri].toString()); selectAll()
                                   textSize=20f; setTextColor(Color.WHITE); setBackgroundColor(Color.parseColor("#0A1828")); setPadding(24,16,24,16)
                               }
-                              val mapName=when(mapIdx){0->"Map 1";1->"Map 2";else->"Map 3"}
-                              AlertDialog.Builder(context).setTitle("$mapName  —  ${CdiConfig.rpmLabel(rowIdx)} RPM").setMessage("Advance (0 - 60 derajat):")
+                              AlertDialog.Builder(context)
+                                  .setTitle("${listOf("Map1","Map2","Map3")[mi]}  —  ${CdiConfig.rpmLabel(ri)} RPM")
+                                  .setMessage("Advance (0 - 60 derajat):")
                                   .setView(input)
-                                  .setPositiveButton("Simpan"){_,_->val v=input.text.toString().toIntOrNull();if(v!=null&&v in 0..60){arr[rowIdx]=v;this.text=v.toString();refreshChart()} else Toast.makeText(context,"Nilai 0 - 60",Toast.LENGTH_SHORT).show()}
-                                  .setNegativeButton("Batal",null).show()
-                              input.postDelayed({input.requestFocus();val imm=context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager;imm.showSoftInput(input,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)},100)
+                                  .setPositiveButton("Simpan"){_,_->
+                                      val v=input.text.toString().toIntOrNull()
+                                      if(v!=null&&v in 0..60){arr[ri]=v;this.text=v.toString();refreshChart()}
+                                      else Toast.makeText(context,"Nilai harus 0 - 60",Toast.LENGTH_SHORT).show()
+                                  }.setNegativeButton("Batal",null).show()
+                              input.postDelayed({input.requestFocus();(context.getSystemService(android.content.Context.INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager).showSoftInput(input,android.view.inputmethod.InputMethodManager.SHOW_IMPLICIT)},100)
                           }
                       }
                   }
               }
 
-              private fun selectMap(view:View,m:Int){
-                  currentMap=m; val on=0xFF00E5FF.toInt(); val off=0xFF334455.toInt()
+              private fun selectMap(view: View, m: Int) {
+                  currentMap=m
+                  val on=0xFF00E5FF.toInt(); val off=0xFF334455.toInt()
                   view.findViewById<TextView>(R.id.tabM1)?.setTextColor(if(m==1)on else off)
                   view.findViewById<TextView>(R.id.tabM2)?.setTextColor(if(m==2)on else off)
                   view.findViewById<TextView>(R.id.tabM3)?.setTextColor(if(m==3)on else off)
@@ -524,12 +543,13 @@ jobs:
                   refreshChart()
               }
 
-              fun refreshCells(){
+              fun refreshCells() {
                   val cfg=MainActivity.config
                   for(mi in 0..2){val arr=cfg.mapArray(mi+1);for(i in 0 until 32)cells[mi][i]?.text=arr[i].toString()}
               }
-
-              private fun refreshChart(){val cfg=MainActivity.config;chart?.setData(cfg.map1.toList(),cfg.map2.toList(),cfg.map3.toList(),currentMap)}
+              private fun refreshChart() {
+                  val cfg=MainActivity.config; chart?.setData(cfg.map1.toList(),cfg.map2.toList(),cfg.map3.toList(),currentMap)
+              }
               private fun toast(msg:String)=Toast.makeText(context,msg,Toast.LENGTH_SHORT).show()
               override fun onDestroyView(){super.onDestroyView();MainActivity.unregisterCallback("kurva")}
           }
@@ -546,7 +566,7 @@ jobs:
               override fun onDraw(canvas:Canvas){
                   val w=width.toFloat();val h=height.toFloat();val padL=52f;val padR=8f;val padT=16f;val padB=8f;val gw=w-padL-padR;val gh=h-padT-padB
                   canvas.drawColor(Color.parseColor("#080E18"))
-                  for(deg in 0..60 step 10){val y=padT+gh-(deg.toFloat()/60f*gh);canvas.drawLine(padL,y,w-padR,y,pGrid);canvas.drawText("$deg",padL-4f,y+7f,pLabel)}
+                  for(deg in 0..60 step 10){val y=padT+gh-(deg.toFloat()/60f*gh);canvas.drawLine(padL,y,w-padR,y,pGrid);pLabel.textSize=22f;canvas.drawText("$deg",padL-4f,y+7f,pLabel)}
                   val maps=listOf(m1,m2,m3);val order=listOf(0,1,2).sortedBy{if(it+1==active)1 else 0}
                   for(mi in order){val data=maps[mi];if(data.isEmpty())continue;val step=gw/(data.size-1);val path=Path();val fill=Path()
                       data.forEachIndexed{i,v->val x=padL+i*step;val y=padT+gh-(v.toFloat()/60f*gh);if(i==0){path.moveTo(x,y);fill.moveTo(x,padT+gh)}else path.lineTo(x,y);fill.lineTo(x,y)}
@@ -560,7 +580,8 @@ jobs:
           """)
 
           # ── SettingFragment.kt ────────────────────────────
-          # Tambah: RON, ROF, RSP sesuai v5.7H
+          # Tambahan: ANG input dalam desimal (misal 111.5),
+          # RON, ROF, RSP, preview pola rumble sesuai v5.7H
           w(UI + "/SettingFragment.kt", r"""package com.ntech.cdi.ui
 
           import android.os.Bundle
@@ -572,16 +593,16 @@ jobs:
           import com.ntech.cdi.R
 
           class SettingFragment : Fragment() {
-              private var etLimiter: EditText? = null
-              private var etAngle: EditText? = null
-              private var etScr: EditText? = null
-              private var spEdge: Spinner? = null
-              // Rumble v5.7H
-              private var etRumbleOn: EditText? = null    // RON
-              private var etRumbleOff: EditText? = null   // ROF
-              private var etRumbleSkip: EditText? = null  // RSK
-              private var etRumbleSpeed: EditText? = null // RSP
-              private var tvRumblePreview: TextView? = null
+              private var etLimiter: EditText?    = null
+              private var etAngle: EditText?       = null   // input dalam derajat×10 misal 1115
+              private var etScr: EditText?         = null
+              private var spEdge: Spinner?         = null
+              private var etRon: EditText?         = null   // Rumble ON RPM
+              private var etRof: EditText?         = null   // Rumble OFF RPM
+              private var etRsk: EditText?         = null   // Rumble Skip cycle
+              private var etRsp: EditText?         = null   // Rumble Speed (skip berturut)
+              private var tvAngleDisplay: TextView? = null  // tampilkan nilai dalam derajat desimal
+              private var tvRumblePreview: TextView? = null // preview pola
 
               override fun onCreateView(inf: LayoutInflater, c: ViewGroup?, s: Bundle?): View? =
                   inf.inflate(R.layout.fragment_setting, c, false)
@@ -591,10 +612,11 @@ jobs:
                   etAngle        = view.findViewById(R.id.etAngle)
                   etScr          = view.findViewById(R.id.etScr)
                   spEdge         = view.findViewById(R.id.spEdge)
-                  etRumbleOn     = view.findViewById(R.id.etRumbleOn)
-                  etRumbleOff    = view.findViewById(R.id.etRumbleOff)
-                  etRumbleSkip   = view.findViewById(R.id.etRumbleSkip)
-                  etRumbleSpeed  = view.findViewById(R.id.etRumbleSpeed)
+                  etRon          = view.findViewById(R.id.etRon)
+                  etRof          = view.findViewById(R.id.etRof)
+                  etRsk          = view.findViewById(R.id.etRsk)
+                  etRsp          = view.findViewById(R.id.etRsp)
+                  tvAngleDisplay = view.findViewById(R.id.tvAngleDisplay)
                   tvRumblePreview= view.findViewById(R.id.tvRumblePreview)
 
                   spEdge?.adapter = ArrayAdapter(requireContext(),
@@ -603,87 +625,112 @@ jobs:
 
                   loadConfig()
 
-                  // ── Kirim Limiter ─────────────────────────
+                  // ── Kirim Limiter ─────────────────────────────
                   view.findViewById<TextView>(R.id.btnSendLim).setOnClickListener {
                       val v = etLimiter?.text.toString().toIntOrNull()
                       if (v != null && v in 1000..16000) {
-                          MainActivity.config.rpmLimiter = v; ss("LIM:$v\r\n", "Limiter $v RPM")
+                          MainActivity.config.rpmLimiter = v; ss("LIM:$v\r\n","Limiter $v RPM")
                       } else toast("Range: 1000 - 16000")
                   }
-                  // ── Kirim Pulser Angle ─────────────────────
+
+                  // ── Kirim Pulser Angle ─────────────────────────
+                  // Input: angka ×10 langsung (misal 1115 untuk 111,5°)
+                  // Atau bisa ketik 630 untuk 63,0°
                   view.findViewById<TextView>(R.id.btnSendAngle).setOnClickListener {
                       val v = etAngle?.text.toString().toIntOrNull()
-                      if (v != null && v in 30..120) {
-                          MainActivity.config.pulserAngle = v; ss("ANG:$v\r\n", "Angle $v°")
-                      } else toast("Range: 30 - 120")
+                      if (v != null && v in 100..1800) {
+                          MainActivity.config.pulserAngleX10 = v
+                          tvAngleDisplay?.text = "= ${CdiConfig.angleStr(v)}"
+                          ss("ANG:$v\r\n","Pulser Angle ${CdiConfig.angleStr(v)}")
+                      } else toast("Range: 100 - 1800 (contoh: 1115 = 111,5°  630 = 63,0°)")
                   }
-                  // ── Kirim SCR ─────────────────────────────
+
+                  // Update tampilan derajat saat mengetik
+                  etAngle?.addTextChangedListener(object : android.text.TextWatcher {
+                      override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                      override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+                      override fun afterTextChanged(s: android.text.Editable?) {
+                          val v = s?.toString()?.toIntOrNull()
+                          tvAngleDisplay?.text = if (v != null && v in 100..1800) "= ${CdiConfig.angleStr(v)}" else ""
+                      }
+                  })
+
+                  // ── Kirim SCR Pulse ────────────────────────────
                   view.findViewById<TextView>(R.id.btnSendScr).setOnClickListener {
                       val us = etScr?.text.toString().toIntOrNull()
                       if (us != null && us in 100..2000) {
-                          val t = CdiConfig.usToTick(us); MainActivity.config.scrPulse = t
-                          ss("SCR:$t\r\n", "SCR ${us}µs")
+                          val tick = CdiConfig.usToTick(us)
+                          MainActivity.config.scrPulse = tick
+                          ss("SCR:$tick\r\n","SCR ${us}µs")
                       } else toast("Range: 100 - 2000 µs")
                   }
-                  // ── Kirim Edge ────────────────────────────
+
+                  // ── Kirim Edge ─────────────────────────────────
                   view.findViewById<TextView>(R.id.btnSendEdge).setOnClickListener {
                       val e = spEdge?.selectedItemPosition ?: 0
-                      MainActivity.config.edge = e; ss("EDG:$e\r\n", "Edge ${if(e==0)"Falling" else "Rising"}")
+                      MainActivity.config.edge = e
+                      ss("EDG:$e\r\n","Edge ${if(e==0)"Falling" else "Rising"}")
                   }
 
-                  // ── Kirim Rumble v5.7H ────────────────────
+                  // ── Kirim Rumble v5.7H ─────────────────────────
+                  // RON, ROF, RSK, RSP dikirim terpisah
                   view.findViewById<TextView>(R.id.btnSendRumble).setOnClickListener {
-                      val ron  = etRumbleOn?.text.toString().toIntOrNull()  ?: 0
-                      val rof  = etRumbleOff?.text.toString().toIntOrNull() ?: 0
-                      val skip = etRumbleSkip?.text.toString().toIntOrNull() ?: 4
-                      val spd  = etRumbleSpeed?.text.toString().toIntOrNull() ?: 1
+                      val ron  = etRon?.text.toString().toIntOrNull() ?: 0
+                      val rof  = etRof?.text.toString().toIntOrNull() ?: 0
+                      val rsk  = etRsk?.text.toString().toIntOrNull() ?: 4
+                      val rsp  = etRsp?.text.toString().toIntOrNull() ?: 1
 
-                      // Validasi sesuai firmware v5.7H
+                      // Validasi RON
                       if (ron != 0 && ron !in 200..5000) { toast("RON: 200-5000 atau 0=OFF"); return@setOnClickListener }
-                      if (ron > 0 && rof <= ron) { toast("ROF harus lebih besar dari RON"); return@setOnClickListener }
-                      if (rof != 0 && rof !in 200..8000) { toast("ROF: 200-8000"); return@setOnClickListener }
-                      if (skip !in 2..8) { toast("Skip siklus: 2-8"); return@setOnClickListener }
-                      if (spd < 1 || spd >= skip) { toast("Speed: 1 sampai ${skip-1}"); return@setOnClickListener }
+                      // Validasi ROF (harus > RON jika RON > 0)
+                      if (ron > 0 && (rof <= ron || rof > 8000)) { toast("ROF harus > RON dan <= 8000"); return@setOnClickListener }
+                      // Validasi RSK
+                      if (rsk !in 2..8) { toast("RSK: 2 - 8"); return@setOnClickListener }
+                      // Validasi RSP (1 s/d RSK-1)
+                      if (rsp < 1 || rsp >= rsk) { toast("RSP: 1 sampai ${rsk-1}"); return@setOnClickListener }
 
-                      MainActivity.config.rumbleOnRpm  = ron
-                      MainActivity.config.rumbleOffRpm = rof
-                      MainActivity.config.rumbleSkip   = skip
-                      MainActivity.config.rumbleSpeed  = spd
-                      updatePreview(skip, spd)
+                      val cfg = MainActivity.config
+                      cfg.rumbleOnRpm  = ron; cfg.rumbleOffRpm = rof
+                      cfg.rumbleSkip   = rsk; cfg.rumbleSpeed  = rsp
 
                       val act = activity as? MainActivity
-                      act?.sendCmd("RON:$ron\r\n");  Thread.sleep(40)
-                      act?.sendCmd("ROF:$rof\r\n");  Thread.sleep(40)
-                      act?.sendCmd("RSK:$skip\r\n"); Thread.sleep(40)
-                      act?.sendCmd("RSP:$spd\r\n")
+                      act?.sendCmd("RON:$ron\r\n"); Thread.sleep(40)
+                      act?.sendCmd("ROF:$rof\r\n"); Thread.sleep(40)
+                      act?.sendCmd("RSK:$rsk\r\n"); Thread.sleep(40)
+                      act?.sendCmd("RSP:$rsp\r\n")
+                      updateRumblePreview(rsk, rsp)
                       toast("Rumble tersimpan ke EEPROM")
                   }
 
-                  // ── Tarik data EEPROM ─────────────────────
+                  // ── Tarik Data EEPROM ──────────────────────────
                   view.findViewById<TextView>(R.id.btnPullData).setOnClickListener {
                       if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
                       (activity as? MainActivity)?.sendCmd("GET\r\n"); toast("Menarik data EEPROM...")
                   }
-                  // ── Simpan semua ke EEPROM ────────────────
+
+                  // ── Simpan Semua ───────────────────────────────
                   view.findViewById<TextView>(R.id.btnSaveAll).setOnClickListener {
                       if (!MainActivity.isConnected) { toast("Tidak terhubung!"); return@setOnClickListener }
                       val cfg = MainActivity.config; val act = activity as? MainActivity
                       act?.sendCmd(cfg.buildMapCmd("M1",cfg.map1)); Thread.sleep(80)
                       act?.sendCmd(cfg.buildMapCmd("M2",cfg.map2)); Thread.sleep(80)
                       act?.sendCmd(cfg.buildMapCmd("M3",cfg.map3)); Thread.sleep(80)
-                      act?.sendCmd("LIM:${cfg.rpmLimiter}\r\n");    Thread.sleep(40)
-                      act?.sendCmd("ANG:${cfg.pulserAngle}\r\n");   Thread.sleep(40)
-                      act?.sendCmd("SCR:${cfg.scrPulse}\r\n");      Thread.sleep(40)
-                      act?.sendCmd("EDG:${cfg.edge}\r\n");           Thread.sleep(40)
-                      act?.sendCmd("RON:${cfg.rumbleOnRpm}\r\n");   Thread.sleep(40)
-                      act?.sendCmd("ROF:${cfg.rumbleOffRpm}\r\n");  Thread.sleep(40)
-                      act?.sendCmd("RSK:${cfg.rumbleSkip}\r\n");    Thread.sleep(40)
+                      act?.sendCmd("LIM:${cfg.rpmLimiter}\r\n");       Thread.sleep(40)
+                      act?.sendCmd("ANG:${cfg.pulserAngleX10}\r\n");   Thread.sleep(40)
+                      act?.sendCmd("SCR:${cfg.scrPulse}\r\n");         Thread.sleep(40)
+                      act?.sendCmd("EDG:${cfg.edge}\r\n");              Thread.sleep(40)
+                      act?.sendCmd("RON:${cfg.rumbleOnRpm}\r\n");      Thread.sleep(40)
+                      act?.sendCmd("ROF:${cfg.rumbleOffRpm}\r\n");     Thread.sleep(40)
+                      act?.sendCmd("RSK:${cfg.rumbleSkip}\r\n");       Thread.sleep(40)
                       act?.sendCmd("RSP:${cfg.rumbleSpeed}\r\n")
                       toast("Semua data tersimpan ke EEPROM!")
                   }
-                  view.findViewById<TextView>(R.id.btnChangeBg).setOnClickListener { (activity as? MainActivity)?.changeBg() }
 
-                  // Hanya reload saat GET response (isConfig=true)
+                  view.findViewById<TextView>(R.id.btnChangeBg).setOnClickListener {
+                      (activity as? MainActivity)?.changeBg()
+                  }
+
+                  // Reload hanya saat GET response
                   MainActivity.registerCallback("setting") { _, isCfg ->
                       if (isCfg) activity?.runOnUiThread { loadConfig() }
                   }
@@ -692,21 +739,23 @@ jobs:
               private fun loadConfig() {
                   val cfg = MainActivity.config
                   etLimiter?.setText(cfg.rpmLimiter.toString())
-                  etAngle?.setText(cfg.pulserAngle.toString())
+                  etAngle?.setText(cfg.pulserAngleX10.toString())
+                  tvAngleDisplay?.text = "= ${CdiConfig.angleStr(cfg.pulserAngleX10)}"
                   etScr?.setText(CdiConfig.tickToUs(cfg.scrPulse).toString())
-                  spEdge?.setSelection(cfg.edge.coerceIn(0, 1))
-                  etRumbleOn?.setText(cfg.rumbleOnRpm.toString())
-                  etRumbleOff?.setText(cfg.rumbleOffRpm.toString())
-                  etRumbleSkip?.setText(cfg.rumbleSkip.toString())
-                  etRumbleSpeed?.setText(cfg.rumbleSpeed.toString())
-                  updatePreview(cfg.rumbleSkip, cfg.rumbleSpeed)
+                  spEdge?.setSelection(cfg.edge.coerceIn(0,1))
+                  etRon?.setText(cfg.rumbleOnRpm.toString())
+                  etRof?.setText(cfg.rumbleOffRpm.toString())
+                  etRsk?.setText(cfg.rumbleSkip.toString())
+                  etRsp?.setText(cfg.rumbleSpeed.toString())
+                  updateRumblePreview(cfg.rumbleSkip, cfg.rumbleSpeed)
               }
 
-              private fun updatePreview(skip: Int, speed: Int) {
-                  val fireCount = (skip - speed).coerceAtLeast(1)
+              // Preview pola rumble: RSK=4 RSP=1 → ⚡⚡⚡✗
+              private fun updateRumblePreview(rsk: Int, rsp: Int) {
+                  val fireCount = (rsk - rsp).coerceAtLeast(1)
                   val sb = StringBuilder("Pola: ")
-                  for (i in 1..skip) sb.append(if (i <= fireCount) "⚡" else "✗").append(" ")
-                  sb.append("(⚡=nyala  ✗=skip)")
+                  for (i in 1..rsk) sb.append(if (i <= fireCount) "⚡" else "✗")
+                  sb.append("  (fire=$fireCount skip=$rsp dari $rsk spark)")
                   tvRumblePreview?.text = sb.toString()
               }
 
@@ -772,8 +821,7 @@ jobs:
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                           android:text="RPM REAL-TIME" android:textColor="#00E5FF" android:textSize="13sp" android:textStyle="bold" android:layout_marginBottom="6dp"/>
                       <com.ntech.cdi.ui.GaugeView android:id="@+id/gauge" android:layout_width="match_parent" android:layout_height="wrap_content"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:orientation="horizontal" android:gravity="center" android:layout_marginTop="10dp">
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:gravity="center" android:layout_marginTop="10dp">
                           <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:gravity="center">
                               <TextView android:id="@+id/tvRpm" android:layout_width="wrap_content" android:layout_height="wrap_content"
                                   android:text="0" android:textColor="#00FF88" android:textSize="60sp" android:textStyle="bold"/>
@@ -785,8 +833,7 @@ jobs:
                               <TextView android:layout_width="wrap_content" android:layout_height="wrap_content" android:text="ADVANCE" android:textColor="#557788" android:textSize="13sp"/>
                           </LinearLayout>
                       </LinearLayout>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:orientation="horizontal" android:layout_marginTop="6dp">
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginTop="6dp">
                           <TextView android:id="@+id/tvMaxRpm" android:layout_width="0dp" android:layout_height="wrap_content"
                               android:layout_weight="1" android:text="Max: 0 RPM" android:textColor="#557788" android:textSize="12sp"/>
                           <TextView android:id="@+id/btnResetMax" android:layout_width="wrap_content" android:layout_height="30dp"
@@ -802,17 +849,23 @@ jobs:
                           android:text="Map Aktif: -" android:textColor="#FFAA00" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="6dp"/>
                       <TextView android:id="@+id/tvEdge" android:layout_width="wrap_content" android:layout_height="wrap_content"
                           android:text="Edge: -" android:textColor="#BB88FF" android:textSize="13sp" android:layout_marginBottom="6dp"/>
-                      <TextView android:id="@+id/tvRumbleStatus" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Rumble: -" android:textColor="#88CCFF" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="4dp"/>
-                      <TextView android:id="@+id/tvRumbleDetail" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="" android:textColor="#FFAA44" android:textSize="12sp" android:layout_marginBottom="6dp"/>
-                      <TextView android:id="@+id/tvLimiter" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Limiter: -" android:textColor="#FF8844" android:textSize="13sp" android:layout_marginBottom="4dp"/>
                       <TextView android:id="@+id/tvAngle" android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Pulser Angle: -" android:textColor="#44DDAA" android:textSize="13sp"/>
+                          android:text="Pulser: -" android:textColor="#44DDAA" android:textSize="13sp" android:layout_marginBottom="6dp"/>
+                      <TextView android:id="@+id/tvLimiter" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Limiter: -" android:textColor="#FF8844" android:textSize="13sp" android:layout_marginBottom="8dp"/>
+                      <View android:layout_width="match_parent" android:layout_height="1dp" android:background="#1A2840" android:layout_marginBottom="8dp"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="RUMBLE IDLE" android:textColor="#00E5FF" android:textSize="12sp" android:textStyle="bold" android:layout_marginBottom="6dp"/>
+                      <TextView android:id="@+id/tvRumbleStatus" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Rumble: OFF" android:textColor="#88CCFF" android:textSize="13sp" android:layout_marginBottom="4dp"/>
+                      <TextView android:id="@+id/tvRon" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Rumble ON  &lt; OFF" android:textColor="#88FF88" android:textSize="12sp" android:layout_marginBottom="2dp"/>
+                      <TextView android:id="@+id/tvRof" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Rumble OFF &gt; —" android:textColor="#FF8888" android:textSize="12sp"/>
                   </LinearLayout>
                   <TextView android:id="@+id/btnPullData" android:layout_width="match_parent" android:layout_height="48dp"
-                      android:text="Tarik Data EEPROM dari CDI" android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"
+                      android:text="Tarik Data EEPROM dari CDI"
+                      android:textColor="#FFFFFF" android:textSize="14sp" android:textStyle="bold"
                       android:background="@drawable/btn_cyan" android:gravity="center"/>
               </LinearLayout>
           </ScrollView>""")
@@ -842,7 +895,8 @@ jobs:
                   <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                       android:text="Kurva Advance vs RPM  (tap sel untuk edit)" android:textColor="#00E5FF"
                       android:textSize="12sp" android:textStyle="bold" android:layout_marginBottom="4dp"/>
-                  <com.ntech.cdi.ui.MapChartView android:id="@+id/mapChart" android:layout_width="match_parent" android:layout_height="wrap_content"/>
+                  <com.ntech.cdi.ui.MapChartView android:id="@+id/mapChart"
+                      android:layout_width="match_parent" android:layout_height="wrap_content"/>
               </LinearLayout>
               <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                   android:orientation="horizontal" android:padding="8dp">
@@ -864,22 +918,24 @@ jobs:
               </ScrollView>
           </LinearLayout>""")
 
-          # fragment_setting.xml — tambah RON, ROF, RSK, RSP
+          # fragment_setting.xml — tambah RON, ROF, RSK, RSP, tvAngleDisplay
           w(RES+"/layout/fragment_setting.xml", """<?xml version="1.0" encoding="utf-8"?>
           <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
               android:layout_width="match_parent" android:layout_height="match_parent" android:background="#060D18">
               <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                   android:orientation="vertical" android:padding="10dp">
 
-                  <!-- ── KONFIGURASI CDI ─────────────────── -->
+                  <!-- KONFIGURASI CDI -->
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                       android:background="@drawable/card" android:orientation="vertical" android:padding="14dp" android:layout_marginBottom="10dp">
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                           android:text="KONFIGURASI CDI" android:textColor="#00E5FF" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="14dp"/>
+
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                           android:text="Edge Trigger" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
                       <Spinner android:id="@+id/spEdge" android:layout_width="match_parent" android:layout_height="48dp"
                           android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginBottom="12dp"/>
+
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                           android:text="RPM Limiter" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
                       <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -893,19 +949,25 @@ jobs:
                               android:text="Kirim" android:textColor="#FFFFFF" android:textSize="12sp"
                               android:background="@drawable/btn_cyan" android:gravity="center"/>
                       </LinearLayout>
+
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="Pulser Angle" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                          android:text="Pulser Angle ×10  (630=63,0°  1115=111,5°  522=52,2°)" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
                       <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
+                          android:orientation="horizontal" android:layout_marginBottom="4dp" android:gravity="center_vertical">
                           <EditText android:id="@+id/etAngle" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
                               android:inputType="number" android:textColor="#00E5FF" android:textSize="18sp" android:textStyle="bold"
                               android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginEnd="8dp"/>
-                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                              android:text="derajat" android:textColor="#557788" android:textSize="12sp" android:layout_marginEnd="8dp"/>
+                          <TextView android:id="@+id/tvAngleDisplay" android:layout_width="wrap_content" android:layout_height="wrap_content"
+                              android:text="" android:textColor="#44DDAA" android:textSize="18sp" android:textStyle="bold"
+                              android:layout_marginEnd="8dp" android:minWidth="80dp"/>
                           <TextView android:id="@+id/btnSendAngle" android:layout_width="80dp" android:layout_height="48dp"
                               android:text="Kirim" android:textColor="#FFFFFF" android:textSize="12sp"
                               android:background="@drawable/btn_cyan" android:gravity="center"/>
                       </LinearLayout>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="Rising edge Mio 5TF → 1115 (111,5°)  |  Falling edge → 522 (52,2°)"
+                          android:textColor="#556677" android:textSize="11sp" android:layout_marginBottom="12dp"/>
+
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
                           android:text="SCR Pulse Width" android:textColor="#AABBCC" android:textSize="12sp" android:layout_marginBottom="4dp"/>
                       <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
@@ -919,84 +981,72 @@ jobs:
                               android:text="Kirim" android:textColor="#FFFFFF" android:textSize="12sp"
                               android:background="@drawable/btn_cyan" android:gravity="center"/>
                       </LinearLayout>
+
                       <TextView android:id="@+id/btnSendEdge" android:layout_width="match_parent" android:layout_height="48dp"
                           android:text="Kirim Edge Setting" android:textColor="#FFFFFF" android:textSize="13sp"
                           android:background="@drawable/btn_cyan" android:gravity="center"/>
                   </LinearLayout>
 
-                  <!-- ── RUMBLE IDLE v5.7H ───────────────── -->
+                  <!-- RUMBLE IDLE v5.7H -->
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                       android:background="@drawable/card" android:orientation="vertical" android:padding="14dp" android:layout_marginBottom="10dp">
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="RUMBLE IDLE — v5.7H" android:textColor="#00E5FF"
-                          android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="4dp"/>
+                          android:text="RUMBLE IDLE — v5.7H" android:textColor="#00E5FF" android:textSize="14sp" android:textStyle="bold" android:layout_marginBottom="4dp"/>
                       <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="0 pada RON = rumble OFF sepenuhnya"
-                          android:textColor="#667788" android:textSize="11sp" android:layout_marginBottom="14dp"/>
+                          android:text="Hysteresis ON/OFF: rumble aktif di antara RON dan ROF tanpa flutter"
+                          android:textColor="#556677" android:textSize="11sp" android:layout_marginBottom="12dp"/>
 
-                      <!-- RON: Rumble ON RPM -->
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="RON — Aktif saat RPM turun di bawah:" android:textColor="#AABBCC"
-                          android:textSize="12sp" android:layout_marginBottom="4dp"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
-                          <EditText android:id="@+id/etRumbleOn" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
-                              android:inputType="number" android:textColor="#00FF88" android:textSize="18sp" android:textStyle="bold"
-                              android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginEnd="8dp"/>
-                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                              android:text="RPM" android:textColor="#557788" android:textSize="12sp"/>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="10dp">
+                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginEnd="8dp">
+                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                  android:text="RON — Aktif di bawah RPM (0=OFF)" android:textColor="#88FF88" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                              <EditText android:id="@+id/etRon" android:layout_width="match_parent" android:layout_height="48dp"
+                                  android:inputType="number" android:textColor="#00E5FF" android:textSize="16sp" android:textStyle="bold"
+                                  android:background="@drawable/input_bg" android:paddingLeft="12dp"/>
+                          </LinearLayout>
+                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                  android:text="ROF — Mati di atas RPM (harus &gt; RON)" android:textColor="#FF8888" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                              <EditText android:id="@+id/etRof" android:layout_width="match_parent" android:layout_height="48dp"
+                                  android:inputType="number" android:textColor="#00E5FF" android:textSize="16sp" android:textStyle="bold"
+                                  android:background="@drawable/input_bg" android:paddingLeft="12dp"/>
+                          </LinearLayout>
                       </LinearLayout>
 
-                      <!-- ROF: Rumble OFF RPM -->
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="ROF — Mati saat RPM naik di atas:" android:textColor="#AABBCC"
-                          android:textSize="12sp" android:layout_marginBottom="4dp"/>
-                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:orientation="horizontal" android:layout_marginBottom="12dp" android:gravity="center_vertical">
-                          <EditText android:id="@+id/etRumbleOff" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
-                              android:inputType="number" android:textColor="#FF8844" android:textSize="18sp" android:textStyle="bold"
-                              android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginEnd="8dp"/>
-                          <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                              android:text="RPM" android:textColor="#557788" android:textSize="12sp"/>
+                      <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content" android:orientation="horizontal" android:layout_marginBottom="10dp">
+                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical" android:layout_marginEnd="8dp">
+                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                  android:text="RSK — Siklus total spark (2-8)" android:textColor="#FFAA44" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                              <EditText android:id="@+id/etRsk" android:layout_width="match_parent" android:layout_height="48dp"
+                                  android:inputType="number" android:textColor="#00E5FF" android:textSize="16sp" android:textStyle="bold"
+                                  android:background="@drawable/input_bg" android:paddingLeft="12dp"/>
+                          </LinearLayout>
+                          <LinearLayout android:layout_width="0dp" android:layout_height="wrap_content" android:layout_weight="1" android:orientation="vertical">
+                              <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                                  android:text="RSP — Skip berturut per siklus (1..RSK-1)" android:textColor="#FFAA44" android:textSize="12sp" android:layout_marginBottom="4dp"/>
+                              <EditText android:id="@+id/etRsp" android:layout_width="match_parent" android:layout_height="48dp"
+                                  android:inputType="number" android:textColor="#00E5FF" android:textSize="16sp" android:textStyle="bold"
+                                  android:background="@drawable/input_bg" android:paddingLeft="12dp"/>
+                          </LinearLayout>
                       </LinearLayout>
 
-                      <!-- RSK: Panjang siklus spark -->
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="RSK — Panjang siklus (2-8 spark):" android:textColor="#AABBCC"
-                          android:textSize="12sp" android:layout_marginBottom="4dp"/>
-                      <EditText android:id="@+id/etRumbleSkip" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:inputType="number" android:textColor="#00E5FF" android:textSize="18sp" android:textStyle="bold"
-                          android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginBottom="12dp"/>
-
-                      <!-- RSP: Jumlah skip per siklus -->
-                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
-                          android:text="RSP — Skip berturut per siklus (kecepatan rumble):" android:textColor="#AABBCC"
-                          android:textSize="12sp" android:layout_marginBottom="4dp"/>
-                      <TextView android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:text="RSP=1 paling kasar, RSP tinggi = lebih halus/lambat"
-                          android:textColor="#667788" android:textSize="11sp" android:layout_marginBottom="4dp"/>
-                      <EditText android:id="@+id/etRumbleSpeed" android:layout_width="match_parent" android:layout_height="48dp"
-                          android:inputType="number" android:textColor="#00E5FF" android:textSize="18sp" android:textStyle="bold"
-                          android:background="@drawable/input_bg" android:paddingLeft="12dp" android:layout_marginBottom="10dp"/>
-
-                      <!-- Preview pola -->
                       <TextView android:id="@+id/tvRumblePreview" android:layout_width="match_parent" android:layout_height="wrap_content"
-                          android:text="Pola: ..." android:textColor="#FFAA44" android:textSize="18sp"
-                          android:layout_marginBottom="14dp"/>
+                          android:text="Pola: ..." android:textColor="#FFDD44" android:textSize="18sp" android:layout_marginBottom="12dp"/>
+                      <TextView android:layout_width="wrap_content" android:layout_height="wrap_content"
+                          android:text="⚡=api nyala  ✗=api skip" android:textColor="#556677" android:textSize="11sp" android:layout_marginBottom="12dp"/>
 
-                      <TextView android:id="@+id/btnSendRumble" android:layout_width="match_parent" android:layout_height="52dp"
-                          android:text="Kirim Semua Setting Rumble" android:textColor="#FFFFFF"
-                          android:textSize="14sp" android:textStyle="bold"
+                      <TextView android:id="@+id/btnSendRumble" android:layout_width="match_parent" android:layout_height="48dp"
+                          android:text="Kirim Semua Setting Rumble" android:textColor="#FFFFFF" android:textSize="13sp"
                           android:background="@drawable/btn_cyan" android:gravity="center"/>
                   </LinearLayout>
 
-                  <!-- ── Aksi global ─────────────────────── -->
+                  <!-- Tombol bawah -->
                   <LinearLayout android:layout_width="match_parent" android:layout_height="wrap_content"
                       android:orientation="horizontal" android:layout_marginBottom="8dp">
-                      <TextView android:id="@+id/btnPullData" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1"
+                      <TextView android:id="@+id/btnPullData" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
                           android:text="Tarik Data EEPROM" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold"
                           android:background="@drawable/btn_outline" android:gravity="center" android:layout_marginEnd="6dp"/>
-                      <TextView android:id="@+id/btnSaveAll" android:layout_width="0dp" android:layout_height="52dp" android:layout_weight="1"
+                      <TextView android:id="@+id/btnSaveAll" android:layout_width="0dp" android:layout_height="48dp" android:layout_weight="1"
                           android:text="Simpan Semua ke EEPROM" android:textColor="#FFFFFF" android:textSize="12sp" android:textStyle="bold"
                           android:background="@drawable/btn_green" android:gravity="center"/>
                   </LinearLayout>
